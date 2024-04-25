@@ -1,0 +1,37 @@
+{
+  "files": {
+    "main.css": "/VideoSIFT/static/css/main.1f134997.css",
+    "main.js": "/VideoSIFT/static/js/main.bce1a3fe.js",
+    "static/js/787.395fa40f.chunk.js": "/VideoSIFT/static/js/787.395fa40f.chunk.js",
+    "static/media/main img.svg": "/VideoSIFT/static/media/main img.b88a8e4fa1252d0673fd1407b17b9101.svg",
+    "static/media/Head.png": "/VideoSIFT/static/media/Head.c22ac6e04eac8c1004ef.png",
+    "static/media/SF-Pro-Display-Semibold.otf": "/VideoSIFT/static/media/SF-Pro-Display-Semibold.69c013a9ccdf71f8fb02.otf",
+    "static/media/SF-Pro-Display-Heavy.otf": "/VideoSIFT/static/media/SF-Pro-Display-Heavy.416830bd90729251123c.otf",
+    "static/media/SF-Pro-Display-Medium.otf": "/VideoSIFT/static/media/SF-Pro-Display-Medium.ac6ee805f3d958d49a6b.otf",
+    "static/media/SF-Pro-Display-Bold.otf": "/VideoSIFT/static/media/SF-Pro-Display-Bold.fc68e8299c85a379d7b1.otf",
+    "static/media/SF-Pro-Display-Regular.otf": "/VideoSIFT/static/media/SF-Pro-Display-Regular.143d56f5a3a2c0dee78c.otf",
+    "static/media/GaussianKernel.png": "/VideoSIFT/static/media/GaussianKernel.268a73dfa17ac47f8479.png",
+    "static/media/DoGKernel.png": "/VideoSIFT/static/media/DoGKernel.d9e7e51a780572ef9d28.png",
+    "static/media/dataset.jpeg": "/VideoSIFT/static/media/dataset.c6560278aa1e7e90a461.jpeg",
+    "static/media/DoG.png": "/VideoSIFT/static/media/DoG.42f110d2009c0e998d62.png",
+    "static/media/LP.png": "/VideoSIFT/static/media/LP.ccfa5cf8a166ba8b31cf.png",
+    "static/media/Resample.png": "/VideoSIFT/static/media/Resample.5bb3847c70f1e3fd833c.png",
+    "static/media/Gaussian.png": "/VideoSIFT/static/media/Gaussian.40b2a4c9872bcbce3abb.png",
+    "static/media/gaussian.jpeg": "/VideoSIFT/static/media/gaussian.1a253d5b441992615770.jpeg",
+    "static/media/madewithlove.svg": "/VideoSIFT/static/media/madewithlove.21ee80ec9b7f0e2e9b9d011fe73d517d.svg",
+    "static/media/Back Shapes_bg.svg": "/VideoSIFT/static/media/Back Shapes_bg.f3479e1728de63facf3b4bb7a8e4d246.svg",
+    "index.html": "/VideoSIFT/index.html",
+    "static/media/logo.svg": "/VideoSIFT/static/media/logo.3b328d0485f224e0a88e7122f2e894ee.svg",
+    "static/media/Back Shapes_bg_2.svg": "/VideoSIFT/static/media/Back Shapes_bg_2.0a161450e0efcbe1b407b7637c767025.svg",
+    "static/media/pending.svg": "/VideoSIFT/static/media/pending.9f254e0117b6246c558b2c4e36df32e6.svg",
+    "static/media/rightarrow.svg": "/VideoSIFT/static/media/rightarrow.0d260ebe17084512e452161e503ced8a.svg",
+    "static/media/done.svg": "/VideoSIFT/static/media/done.e3f027014fce5e24c47c4184b562f758.svg",
+    "main.1f134997.css.map": "/VideoSIFT/static/css/main.1f134997.css.map",
+    "main.bce1a3fe.js.map": "/VideoSIFT/static/js/main.bce1a3fe.js.map",
+    "787.395fa40f.chunk.js.map": "/VideoSIFT/static/js/787.395fa40f.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.1f134997.css",
+    "static/js/main.bce1a3fe.js"
+  ]
+}
