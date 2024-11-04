@@ -10,10 +10,10 @@
 NotebookFileLineBreakTest
 NotebookFileLineBreakTest
 NotebookDataPosition[       158,          7]
-NotebookDataLength[     43192,       1109]
-NotebookOptionsPosition[     40264,       1051]
-NotebookOutlinePosition[     40715,       1068]
-CellTagsIndexPosition[     40672,       1065]
+NotebookDataLength[     45451,       1149]
+NotebookOptionsPosition[     42326,       1089]
+NotebookOutlinePosition[     42777,       1106]
+CellTagsIndexPosition[     42734,       1103]
 WindowFrame->Normal*)
 
 (* Beginning of Notebook Content *)
@@ -814,8 +814,8 @@ Cell[BoxData[
       Manipulator}, {{
        Hold[$CellContext`\[Lambda]2$$], 1}, -10, 10, 1, ControlType -> 
       Manipulator}}, Typeset`size$$ = {
-    428.42353717259, {109., 113.87420196121218`}}, Typeset`update$$ = 0, 
-    Typeset`initDone$$, Typeset`skipInitDone$$ = True}, 
+    865.4409537315369, {2.6660157227888703`, 9.045410488033667}}, 
+    Typeset`update$$ = 0, Typeset`initDone$$, Typeset`skipInitDone$$ = True}, 
     DynamicBox[Manipulate`ManipulateBoxes[
      1, StandardForm, 
       "Variables" :> {$CellContext`x1$$ = 1, $CellContext`x2$$ = 
@@ -845,7 +845,7 @@ $CellContext`\[Lambda]2$$],
          1}, {{$CellContext`\[Lambda]1$$, 1}, -10, 10, 
          1}, {{$CellContext`\[Lambda]2$$, 1}, -10, 10, 1}}, "Options" :> {}, 
       "DefaultOptions" :> {}],
-     ImageSizeCache->{475., {207.1340331430547, 212.8659668569453}},
+     ImageSizeCache->{914., {104.63403309800196`, 110.36596690199804`}},
      SingleEvaluation->True],
     Deinitialization:>None,
     DynamicModuleValues:>{},
@@ -857,11 +857,49 @@ $CellContext`\[Lambda]2$$],
    StripOnInput->False],
   Manipulate`InterpretManipulate[1]]], "Output",
  CellChangeTimes->{
-  3.923002543746809*^9, 3.923002672054617*^9, {3.9230027066923275`*^9, 
-   3.9230027358204937`*^9}, {3.923002770217781*^9, 3.923002786925562*^9}, {
-   3.923003030865141*^9, 3.92300303555007*^9}, {3.9230032833663673`*^9, 
-   3.9230032984727116`*^9}},
- CellLabel->"Out[96]=",ExpressionUUID->"1ad774f5-1f5f-b44f-9ea9-f2a6559eb791"]
+  3.923002543746809*^9, 3.923002672054617*^9, {3.923002706692328*^9, 
+   3.923002735820494*^9}, {3.923002770217781*^9, 3.923002786925562*^9}, {
+   3.923003030865141*^9, 3.92300303555007*^9}, {3.923003283366368*^9, 
+   3.923003298472712*^9}},
+ CellLabel->"Out[96]=",ExpressionUUID->"1ad774f5-1f5f-b44f-9ea9-f2a6559eb791"],
+
+Cell[BoxData[
+ TemplateBox[{
+  "ListPlot", "lpn", 
+   "\"\\!\\(\\*RowBox[{\\\"Transpose\\\", \\\"[\\\", \
+TagBox[RowBox[{RowBox[{\\\"A\\\", \\\"[\\\", RowBox[{RowBox[{\\\"{\\\", \
+RowBox[{RowBox[{\\\"{\\\", RowBox[{\\\"-\\\", \\\"8.`16.\\\"}], \\\"}\\\"}], \
+\\\",\\\", RowBox[{\\\"{\\\", RowBox[{\\\"-\\\", \\\"2.`16.\\\"}], \
+\\\"}\\\"}]}], \\\"}\\\"}], \\\",\\\", RowBox[{\\\"{\\\", \
+RowBox[{RowBox[{\\\"{\\\", \\\"4.`16.\\\", \\\"}\\\"}], \\\",\\\", RowBox[{\\\
+\"{\\\", \\\"8.`16.\\\", \\\"}\\\"}]}], \\\"}\\\"}], \\\",\\\", \
+\\\"4.`16.\\\", \\\",\\\", RowBox[{\\\"-\\\", \\\"4.`16.\\\"}]}], \
+\\\"]\\\"}], \\\".\\\", RowBox[{\\\"Transpose\\\", \\\"[\\\", \\\"M\\\", \
+\\\"]\\\"}]}], Function[Annotation[Slot[1], \
+\\\"Charting`Private`Tag#1\\\"]]], \\\"]\\\"}]\\) is not a list of numbers or \
+pairs of numbers.\"", 2, 32, 9, 17150888532808584199, "Local"},
+  "MessageTemplate"]], "Message", "MSG",
+ CellChangeTimes->{3.936746360910425*^9},
+ CellLabel->"",ExpressionUUID->"5dae095c-b010-1a48-a8d9-57c23af6a3d8"],
+
+Cell[BoxData[
+ TemplateBox[{
+  "ListPlot", "lpn", 
+   "\"\\!\\(\\*RowBox[{\\\"Transpose\\\", \\\"[\\\", \
+TagBox[RowBox[{RowBox[{\\\"A\\\", \\\"[\\\", RowBox[{RowBox[{\\\"{\\\", \
+RowBox[{RowBox[{\\\"{\\\", RowBox[{\\\"-\\\", \\\"8.`16.\\\"}], \\\"}\\\"}], \
+\\\",\\\", RowBox[{\\\"{\\\", RowBox[{\\\"-\\\", \\\"2.`16.\\\"}], \
+\\\"}\\\"}]}], \\\"}\\\"}], \\\",\\\", RowBox[{\\\"{\\\", \
+RowBox[{RowBox[{\\\"{\\\", \\\"4.`16.\\\", \\\"}\\\"}], \\\",\\\", RowBox[{\\\
+\"{\\\", \\\"8.`16.\\\", \\\"}\\\"}]}], \\\"}\\\"}], \\\",\\\", \
+\\\"4.`16.\\\", \\\",\\\", RowBox[{\\\"-\\\", \\\"4.`16.\\\"}]}], \
+\\\"]\\\"}], \\\".\\\", RowBox[{\\\"Transpose\\\", \\\"[\\\", \\\"M\\\", \
+\\\"]\\\"}]}], Function[Annotation[Slot[1], \
+\\\"Charting`Private`Tag#1\\\"]]], \\\"]\\\"}]\\) is not a list of numbers or \
+pairs of numbers.\"", 2, 32, 10, 17150888532808584199, "Local"},
+  "MessageTemplate"]], "Message", "MSG",
+ CellChangeTimes->{3.9367463616230392`*^9},
+ CellLabel->"",ExpressionUUID->"4c6832f7-beb8-a944-8586-73c6de5324bf"]
 }, Open  ]],
 
 Cell[CellGroupData[{
@@ -932,7 +970,7 @@ Cell[BoxData[
       Manipulator}, {{
        Hold[$CellContext`\[Lambda]2$$], 1}, -10, 10, 1, ControlType -> 
       Manipulator}}, Typeset`size$$ = {
-    60.94619385855538, {11.343896667645982`, 17.07583038153659}}, 
+    232.58985424041748`, {2.443847745889798, 8.410644839750603}}, 
     Typeset`update$$ = 0, Typeset`initDone$$, Typeset`skipInitDone$$ = True}, 
     DynamicBox[Manipulate`ManipulateBoxes[
      1, StandardForm, 
@@ -955,7 +993,7 @@ $CellContext`\[Lambda]2$$]],
          1}, {{$CellContext`\[Lambda]1$$, 1}, -10, 10, 
          1}, {{$CellContext`\[Lambda]2$$, 1}, -10, 10, 1}}, "Options" :> {}, 
       "DefaultOptions" :> {}],
-     ImageSizeCache->{248., {110.1340331430547, 115.8659668569453}},
+     ImageSizeCache->{281., {104.63403309800196`, 110.36596690199804`}},
      SingleEvaluation->True],
     Deinitialization:>None,
     DynamicModuleValues:>{},
@@ -966,7 +1004,7 @@ $CellContext`\[Lambda]2$$]],
    Deployed->True,
    StripOnInput->False],
   Manipulate`InterpretManipulate[1]]], "Output",
- CellChangeTimes->{{3.9230029363121014`*^9, 3.9230029634086514`*^9}},
+ CellChangeTimes->{{3.923002936312101*^9, 3.923002963408651*^9}},
  CellLabel->"Out[90]=",ExpressionUUID->"c9480ace-3137-1148-bcf1-807c6c27b0b0"]
 }, Open  ]],
 
@@ -1015,7 +1053,7 @@ Cell[BoxData[
     Typeset`animator$$, Typeset`animvar$$ = 1, Typeset`name$$ = 
     "\"untitled\"", Typeset`specs$$ = {{{
        Hold[$CellContext`a$$], 1, "a"}, 0, 2 Pi, ControlType -> Manipulator}},
-     Typeset`size$$ = {447.7627796837943, {104., 109.37589500365146`}}, 
+     Typeset`size$$ = {447.7627779841423, {104., 109.37589605078716`}}, 
     Typeset`update$$ = 0, Typeset`initDone$$, Typeset`skipInitDone$$ = True}, 
     DynamicBox[Manipulate`ManipulateBoxes[
      1, StandardForm, "Variables" :> {$CellContext`a$$ = 1}, 
@@ -1034,7 +1072,7 @@ Cell[BoxData[
            Row[{"Sin[a x]"}]}]}], 
       "Specifications" :> {{{$CellContext`a$$, 1, "a"}, 0, 2 Pi, Appearance -> 
          "Labeled"}}, "Options" :> {}, "DefaultOptions" :> {}],
-     ImageSizeCache->{494., {147.1340331430547, 152.8659668569453}},
+     ImageSizeCache->{496., {148.13403309800196`, 153.86596690199804`}},
      SingleEvaluation->True],
     Deinitialization:>None,
     DynamicModuleValues:>{},
@@ -1101,19 +1139,19 @@ Cell[26272, 702, 718, 20, 61, "Output",ExpressionUUID->"b5065429-dbc0-8743-b53a-
 }, Open  ]],
 Cell[CellGroupData[{
 Cell[27027, 727, 2348, 70, 71, "Input",ExpressionUUID->"76f4cd27-de73-1c48-b0fe-3afe42dc900d"],
-Cell[29378, 799, 3336, 64, 462, "Output",ExpressionUUID->"1ad774f5-1f5f-b44f-9ea9-f2a6559eb791"]
+Cell[29378, 799, 3347, 64, 234, "Output",ExpressionUUID->"1ad774f5-1f5f-b44f-9ea9-f2a6559eb791"],
+Cell[32728, 865, 1019, 17, 28, "Message",ExpressionUUID->"5dae095c-b010-1a48-a8d9-57c23af6a3d8"],
+Cell[33750, 884, 1022, 17, 28, "Message",ExpressionUUID->"4c6832f7-beb8-a944-8586-73c6de5324bf"]
 }, Open  ]],
 Cell[CellGroupData[{
-Cell[32751, 868, 1502, 46, 71, "Input",ExpressionUUID->"4c96e1ef-572e-cd4a-a117-1abec528249e"],
-Cell[34256, 916, 2841, 53, 245, "Output",ExpressionUUID->"c9480ace-3137-1148-bcf1-807c6c27b0b0"]
+Cell[34809, 906, 1502, 46, 71, "Input",ExpressionUUID->"4c96e1ef-572e-cd4a-a117-1abec528249e"],
+Cell[36314, 954, 2841, 53, 234, "Output",ExpressionUUID->"c9480ace-3137-1148-bcf1-807c6c27b0b0"]
 }, Open  ]],
 Cell[CellGroupData[{
-Cell[37134, 974, 1205, 33, 67, "Input",ExpressionUUID->"96976240-1c01-c343-afbf-4854b1fe7073"],
-Cell[38342, 1009, 1906, 39, 319, "Output",ExpressionUUID->"32aaa1f7-b785-2240-b038-896d30c7cdc0"]
+Cell[39192, 1012, 1205, 33, 67, "Input",ExpressionUUID->"96976240-1c01-c343-afbf-4854b1fe7073"],
+Cell[40400, 1047, 1910, 39, 321, "Output",ExpressionUUID->"32aaa1f7-b785-2240-b038-896d30c7cdc0"]
 }, Open  ]]
 }
 ]
 *)
-
-(* End of internal cache information *)
 
