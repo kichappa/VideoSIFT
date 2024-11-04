@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/storage/pace-apps/spack/packages/linux-rhel9-x86_64_v3/gcc-11.3.1/cmake-3.26.3-cdybay2vek24wxrgh2xno2kdcy3uphs6/bin/cmake;-P;/storage/ice1/3/7/kshenoy8/stereosquad/openMVG_Build/_deps/rerun_sdk-subbuild/rerun_sdk-populate-prefix/src/rerun_sdk-populate-stamp/download-rerun_sdk-populate.cmake;COMMAND;/storage/pace-apps/spack/packages/linux-rhel9-x86_64_v3/gcc-11.3.1/cmake-3.26.3-cdybay2vek24wxrgh2xno2kdcy3uphs6/bin/cmake;-P;/storage/ice1/3/7/kshenoy8/stereosquad/openMVG_Build/_deps/rerun_sdk-subbuild/rerun_sdk-populate-prefix/src/rerun_sdk-populate-stamp/verify-rerun_sdk-populate.cmake;COMMAND;/storage/pace-apps/spack/packages/linux-rhel9-x86_64_v3/gcc-11.3.1/cmake-3.26.3-cdybay2vek24wxrgh2xno2kdcy3uphs6/bin/cmake;-P;/storage/ice1/3/7/kshenoy8/stereosquad/openMVG_Build/_deps/rerun_sdk-subbuild/rerun_sdk-populate-prefix/src/rerun_sdk-populate-stamp/extract-rerun_sdk-populate.cmake
+source_dir=/home/hice1/kshenoy8/scratch/stereosquad/openMVG_Build/_deps/rerun_sdk-src
+work_dir=/home/hice1/kshenoy8/scratch/stereosquad/openMVG_Build/_deps
+url(s)=https://github.com/rerun-io/rerun/releases/latest/download/rerun_cpp_sdk.zip
+hash=
+no_extract=
+

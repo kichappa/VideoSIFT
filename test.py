@@ -1,128 +1,43 @@
-import numpy as np
-import cv2
-import pycuda.driver as cuda
-import pycuda.autoinit
-from pycuda.compiler import SourceModule
+import cv2, numpy as np
+from scipy.ndimage import maximum_filter
 
-# # CUDA kernel for Gaussian blur
-gaussian_blur_kernel = """
-__global__ void gaussian_blur(float *input, float *output, float *kernel, int width, int height, int kernel_size) {
-    // Calculate pixel index
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int idy = blockIdx.y * blockDim.y + threadIdx.y;
+def peak_detection_scipy(dog1_r, dog2_r, dog3_r):
+    rows, cols = dog2_r.shape
     
-    // allocate shared memory, of size kernel_size x kernel_size
-    __shared__ float shared_kernel[kernel_size][kernel_size];
-
-    if (idx < width && idy < height) {
-        // Apply Gaussian blur
-        
-        // Copy kernel to shared memory
-        if (threadIdx.x < kernel_size && threadIdx.y < kernel_size) {
-            
-        
-        
-        output[idx + idy * width] = input[idx + idy * width];
-    }
-}
-"""
-
-
-# get gaussian kernel
-def get_gaussian_kernel(ksize, sigma):
-    kernel = cv2.getGaussianKernel(ksize, sigma)
-    kernel = kernel * kernel.T
-    sum = np.sum(kernel)
+    # dog1_r, dog1_g, dog1_b = cv2.split(dog1)
+    # dog2_r, dog2_g, dog2_b = cv2.split(dog2)
+    # dog3_r, dog3_g, dog3_b = cv2.split(dog3)
     
-    if abs(sum - 1) > 1e-7:
-        kernel = kernel / sum
-        
-    return kernel
-
-# Compile CUDA kernel
-mod = SourceModule(gaussian_blur_kernel)
-
-# Get kernel function
-gaussian_blur_func = mod.get_function("gaussian_blur")
-
-def gaussian_blur_cuda(image, kernel):
-    # Get image dimensions
-    height, width = image.shape
-    kernel_size = kernel.shape[0]
-
-    # Allocate memory on GPU for input image
-    input_gpu = cuda.mem_alloc(image.nbytes)
-
-    # Allocate memory on GPU for output image, size = input - kernel + 1
-    output_gpu = cuda.mem_alloc((height - 2) * (width - 2) * image.itemsize)
+    DoG_stack_r = np.stack([dog1_r, dog2_r, dog3_r], axis=-1)
+    print("DoG_stack_r", DoG_stack_r)
+    # DoG_stack_g = np.stack([dog1_g, dog2_g, dog3_g], axis=-1)
+    # DoG_stack_b = np.stack([dog1_b, dog2_b, dog3_b], axis=-1)
     
-    # Allocate memory on GPU for kernel
-    kernel_gpu = cuda.mem_alloc(kernel.nbytes)
-
-    # Copy input data to GPU memory
-    cuda.memcpy_htod(input_gpu, image)
-    cuda.memcpy_htod(kernel_gpu, kernel)
-
-    # Define block and grid dimensions
-    block = (16, 16, 1)
-    grid = ((width + block[0] - 1) // block[0], (height + block[1] - 1) // block[1], 1)
-
-    # Call CUDA kernel
-    gaussian_blur_func(input_gpu, output_gpu, kernel_gpu, np.int32(width), np.int32(height), np.int32(kernel_size), block=block, grid=grid)
-
-    # Allocate memory on CPU for output
-    output_array = np.empty((height - 2, width - 2), dtype=image.dtype)
-
-    # Copy output data from GPU to CPU
-    cuda.memcpy_dtoh(output_array, output_gpu)
-
-    return output_array
-
-# Example usage
-# image = np.random.rand(512, 512).astype(np.float32)
-# blurred_image = gaussian_blur_cuda(image)
-
-print(get_gaussian_kernel(3, 1))
-
-
-
-# t1 = 0
-# t2 = 0
-# t3 = 0
-# t4 = 0
-
-# kernel1 = []
-# kernel2 = []
-# kernel3 = []
-# kernel4 = []
-
-# n = 10000
-# for i in range(0, n):
-#     kernel = cv2.getGaussianKernel(3, 1)
+    local_max_r = maximum_filter(DoG_stack_r, size=3)
+    print("local_max_r", local_max_r)
+    # local_max_g = maximum_filter(DoG_stack_g, size=3)
+    # local_max_b = maximum_filter(DoG_stack_b, size=3)
     
-#     start = cv2.getTickCount()
-#     kernel1 = cv2.getGaussianKernel(3, 1) * cv2.getGaussianKernel(3, 1).T
-#     end = cv2.getTickCount()
-#     t1 += (end - start) / cv2.getTickFrequency()
+    peak_mask_r = (dog2_r == local_max_r[:,:,1])
+    print("peak_mask_r", peak_mask_r)
+    # peak_mask_g = (dog2_g == local_max_g[:,:,1])
+    # peak_mask_b = (dog2_b == local_max_b[:,:,1])
     
-#     start = cv2.getTickCount()
-#     kernel2 = np.outer(cv2.getGaussianKernel(3, 1), cv2.getGaussianKernel(3, 1))
-#     end = cv2.getTickCount()
-#     t2 += (end - start) / cv2.getTickFrequency()
+    output_r = np.where(peak_mask_r, dog2_r, 0)
+    print("output_r", output_r)
+    # output_g = np.where(peak_mask_g, dog2_g, 0)
+    # output_b = np.where(peak_mask_b, dog2_b, 0)
     
-#     start = cv2.getTickCount()
-#     kernel3 = np.outer(kernel, kernel)
-#     end = cv2.getTickCount()
-#     t3 += (end - start) / cv2.getTickFrequency()
+    # output = cv2.merge([output_r, output_g, output_b])
     
-#     start = cv2.getTickCount()
-#     kernel4 = kernel * kernel.T
-    
-#     end = cv2.getTickCount()
-#     t += (end - start) / cv2.getTickFrequency()
+    return output_r
 
-# # print with 8 decimal places, no scientific notation
-# print(f"Time taken cv2: {t1/n:.8f}")
-# print(f"Time taken npo: {t2/n:.8f}")
-# print(f"Time taken def: {t3/n:.8f}")
-# print(f"Time taken def: {t4/n:.8f}")
+# create a 3 3x3 arrays, random values
+dog1 = np.round(np.random.rand(6, 6), 2)
+print("dog1", dog1)
+dog2 = np.round(np.random.rand(6, 6), 2)
+print("dog2", dog2)
+dog3 = np.round(np.random.rand(6, 6), 2)
+print("dog3", dog3)
+
+peak_detection_scipy(dog1, dog2, dog3)

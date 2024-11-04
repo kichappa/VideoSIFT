@@ -31,31 +31,33 @@ function getSchemas(schemaBase, sigma, s, layers)
 end
 
 function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron::Int8)
-    blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-    threadNum::UInt16 = threadIdx().x - 1
-    threads::Int16 = blockDim().x
+    let
+        blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+        threadNum::UInt16 = threadIdx().x - 1
+        threads::Int16 = blockDim().x
 
-    # there could be more blocks than needed
-    thisX::Int32 = blockNum ÷ cld((height - 2 * apron), (threads - 2 * apron)) + 1 # 1-indexed
-    thisY::Int16 = blockNum % cld((height - 2 * apron), (threads - 2 * apron)) * (threads - 2 * apron) + threadNum + 1 # 1-indexed
-    thisPX::Int32 = 0
+        # there could be more blocks than needed
+        thisX::Int32 = blockNum ÷ cld((height - 2 * apron), (threads - 2 * apron)) + 1 # 1-indexed
+        thisY::Int16 = blockNum % cld((height - 2 * apron), (threads - 2 * apron)) * (threads - 2 * apron) + threadNum + 1 # 1-indexed
+        thisPX::Int32 = 0
 
-    data = CuDynamicSharedArray(Float32, threads)
+        data = CuDynamicSharedArray(Float32, threads)
 
-    # fill the shared memory
-    if thisY <= height && thisX <= width
-        thisPX = thisY + (thisX - 1) * height
-        data[threadNum+1] = inp[thisPX]
-    end
-    sync_threads()
-
-    # convolution
-    if apron < thisY <= height - apron && thisX <= width && apron <= threadNum < threads - apron
-        sum::Float32 = 0.0
-        for i in -apron:apron
-            sum += data[threadNum+1+i] * conv[apron+1+i]
+        # fill the shared memory
+        if thisY <= height && thisX <= width
+            thisPX = thisY + (thisX - 1) * height
+            data[threadNum+1] = inp[thisPX]
         end
-        buffer[thisY, thisX] = sum
+        sync_threads()
+
+        # convolution
+        if apron < thisY <= height - apron && thisX <= width && apron <= threadNum < threads - apron
+            sum::Float32 = 0.0
+            for i in -apron:apron
+                sum += data[threadNum+1+i] * conv[apron+1+i]
+            end
+            buffer[thisY, thisX] = sum
+        end
     end
     return
 end
@@ -212,7 +214,7 @@ end
 
 let
     println("Here we go!")
-    nImages = 64
+    nImages = 1
     img = []
     imgWidth = 0
     time_taken = 0

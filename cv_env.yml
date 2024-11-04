@@ -1,0 +1,10 @@
+name: cv_env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - matplotlib
+  - pip
+  - python=3.9
+  - scipy=1.5.2
+  - opencv
