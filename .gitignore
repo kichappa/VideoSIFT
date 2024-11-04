@@ -15,6 +15,9 @@ opencv/*
 opencv_contrib/*
 CMakeFiles/*
 
+# nsight files
+.ncu-rep
+
 # C extensions
 *.so
 
@@ -170,3 +173,5 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+convolve.0.col.ncu-rep
+convolve.0.row.ncu-rep
