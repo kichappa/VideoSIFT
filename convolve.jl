@@ -67,7 +67,7 @@ function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, img
     threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
     threads::Int16 = blockDim().x * blockDim().y
 
-    if threads <= width
+    if true #threads <= width
 
         blocksInACol::Int8 = cld(inpH, blockDim().x)
         blocksInARow::Int16 = cld(imgWidth - 2 * apron, blockDim().y - 2 * apron)
@@ -178,8 +178,8 @@ function doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, 
                 # println(launch_configuration(kernel.fun))
                 # println("h-2ap:$(Int16(height - 2 * aprons[i])), h: $(Int16(height)), w: $(Int32(width)), imW: $(Int16(imgWidth)), apron: $(Int8(aprons[i]))")
                 time_taken += CUDA.@elapsed @cuda threads = threads_row blocks = blocks_row shmem = shmem_row row_kernel(buffer, conv_gpus[i], out_gpus[j][i], Int16(height - 2 * aprons[i]), Int16(height), Int32(width), Int16(imgWidth), Int8(aprons[i]))
-                # save("assets/gaussian_new_o$(j)_l$(i)_r.png", colorview(Gray, collect(buffer)))
-                # save("assets/gaussian_new_o$(j)_l$(i)_rc.png", colorview(Gray, collect(out_gpus[j][i])))
+                save("assets/gaussian_j_o$(j)_l$(i)_r.png", colorview(Gray, collect(buffer)))
+                save("assets/gaussian_j_o$(j)_l$(i)_rc.png", colorview(Gray, collect(out_gpus[j][i])))
             end
         end
         time_taken += CUDA.@elapsed buffer = CUDA.zeros(Float32, cld(height, 2), cld(width, 2))
@@ -212,13 +212,15 @@ end
 
 let
     println("Here we go!")
-    nImages = 64
+    nImages = 1
     img = []
     imgWidth = 0
     time_taken = 0
     # load the images
     for i in 1:nImages
-        img_temp = Float32.(Gray.(FileIO.load("assets/DJI_20240328_234918_14_null_beauty.mp4_frame_$i.png")))
+        # img_temp = Float32.(Gray.(FileIO.load("assets/images/DJI_20240328_234918_14_null_beauty.mp4_frame_$(i+900).png")))
+
+        img_temp = Float32.(Gray.(FileIO.load("assets/images/DJI_20240329_154936_17_null_beauty.mp4_frame_$(i+900).png")))
         if i == 1
             img = img_temp
             imgWidth = size(img, 2)
@@ -233,8 +235,8 @@ let
 
     schemaBase = Dict(:name => "gaussian1D", :epsilon => 0.1725)
 
-    layers = 3
-    octaves = 4
+    layers = 5
+    octaves = 3
     schemas = getSchemas(schemaBase, 1.6, sqrt(2), layers)
     aprons = getApron(schemas)
 

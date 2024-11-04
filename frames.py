@@ -25,8 +25,8 @@ while True:
     
     if len(images) > 900:
         # save the frame
-        cv2.imwrite(f'assets/{video_name}_frame_{len(images)}.png', frame)
+        cv2.imwrite(f'assets/images/{video_name}_frame_{len(images)}.png', frame)
     
     
-    if len(images) == 905:
+    if len(images) == 900+128:
         break
