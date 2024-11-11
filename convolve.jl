@@ -1,6 +1,14 @@
 using CUDA, Images, FileIO
-import OpenCV.getGaussianKernel
+# import OpenCV.getGaussianKernel
 using DelimitedFiles
+using Unrolled
+
+function getGaussianKernel(ksize, sigma)
+    kernel = CUDA.zeros(Float32, ksize)
+    kernel = exp.(-0.5 * ((0:ksize-1) .- (ksize - 1) / 2) .^ 2 / sigma^2)
+    kernel = kernel ./ sum(kernel)
+    return kernel
+end
 
 function getApron(schema)
     if typeof(schema) == Dict{Symbol,Any}
@@ -37,24 +45,27 @@ function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron
         threads::Int16 = blockDim().x
 
         # there could be more blocks than needed
-        thisX::Int32 = blockNum ÷ cld((height - 2 * apron), (threads - 2 * apron)) + 1 # 1-indexed
-        thisY::Int16 = blockNum % cld((height - 2 * apron), (threads - 2 * apron)) * (threads - 2 * apron) + threadNum + 1 # 1-indexed
+        # thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (blockDim().x - 2 * apron))) + 1 # 1-indexed
+        thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
+        thisY::Int16 = blockNum % cld((height - 2 * apron), (blockDim().x - 2 * apron)) * (blockDim().x - 2 * apron) + (threadIdx().x - 1) + 1 # 1-indexed
         thisPX::Int32 = 0
 
-        data = CuDynamicSharedArray(Float32, threads)
+        data = CuDynamicSharedArray(Float32, blockDim().x)
 
         # fill the shared memory
         if thisY <= height && thisX <= width
             thisPX = thisY + (thisX - 1) * height
             data[threadNum+1] = inp[thisPX]
+            # data[threadIdx().x] = inp[thisPX]
         end
         sync_threads()
 
         # convolution
-        if apron < thisY <= height - apron && thisX <= width && apron <= threadNum < threads - apron
+        if apron < thisY <= height - apron && thisX <= width && apron <= (threadIdx().x - 1) < (blockDim().x) - apron
             sum::Float32 = 0.0
             for i in -apron:apron
                 sum += data[threadNum+1+i] * conv[apron+1+i]
+                # sum += data[threadIdx().x+i] * conv[apron+1+i]
             end
             buffer[thisY, thisX] = sum
         end
@@ -66,14 +77,15 @@ end
 # inpH is the height of the image excluding the aprons, after the column kernel
 function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, imgWidth::Int16, apron::Int8)
     blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-    threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
-    threads::Int16 = blockDim().x * blockDim().y
+    # threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
+    # threads::Int16 = blockDim().x * blockDim().y
 
     if true #threads <= width
 
-        blocksInACol::Int8 = cld(inpH, blockDim().x)
+        # blocksInACol::Int8 = cld(inpH, blockDim().x)
         blocksInARow::Int16 = cld(imgWidth - 2 * apron, blockDim().y - 2 * apron)
-        blocksInAnImage::Int16 = blocksInACol * blocksInARow
+        # blocksInAnImage::Int16 = blocksInACol * blocksInARow
+        blocksInAnImage::Int16 = cld(inpH, blockDim().x) * blocksInARow
         # #             |  number of images to the left * imgWidth |   blockNum wrt this image ÷ blocksInAColumn   * thrds in x   | number of threads on the left|
         # thisX::Int32 = fld(blockNum, blocksInAnImage) * imgWidth + fld(blockNum % blocksInAnImage, blocksInACol) * blockDim().y + threadIdx().y # 1-indexed
         # thisY::Int16 = blockNum % blocksInACol * blockDim().x + threadIdx().x # 1-indexed
@@ -86,32 +98,36 @@ function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, img
 
         data = CuDynamicSharedArray(Float32, (blockDim().x, blockDim().y))
 
-        # fill the shared memory
-        thisPX::Int32 = thisY + (thisX - 1) * buffH
-        if thisX <= width && thisY <= inpH + apron
-            data[threadNum+1] = inp[thisPX]
+        begin
+            # fill the shared memory
+            thisPX::Int32 = thisY + (thisX - 1) * buffH
+            if thisX <= width && thisY <= inpH + apron
+                data[(threadIdx().x-1+(threadIdx().y-1)*blockDim().x)+1] = inp[thisPX]
+            end
         end
         sync_threads()
 
-        # if threadNum==0 && blockNum==0
+        # if (threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x)==0 && blockNum==0
         #     @cuprintln("Size of inp: $(size(inp)), size of out: $(size(out)), size of data: $(size(data))")
         # end
 
-        # convolution
         thisIsAComputationThread::Bool = thisY <= inpH + apron && apron < thisX <= width - apron && apron < threadIdx().y <= blockDim().y - apron
-        # if thisY == 1073 && apron==6 && thisX > 3900
-        #     @cuprintln("isThisAComputationThread: $(thisIsAComputationThread), thisX: $thisX)")
-        # end
         if (blockNum % blocksInAnImage) % blocksInARow == blocksInARow - 1
             thisIsAComputationThread = thisIsAComputationThread && (thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth - 2 * apron)
         end
-        if thisIsAComputationThread
-            sum::Float32 = 0.0
-            for i in -apron:apron
-                sum += data[threadNum+1+i*blockDim().x] * conv[apron+1+i]
+        begin
+            # convolution
+            # if thisY == 1073 && apron==6 && thisX > 3900
+            #     @cuprintln("isThisAComputationThread: $(thisIsAComputationThread), thisX: $thisX)")
+            # end
+            if thisIsAComputationThread
+                sum::Float32 = 0.0
+                for i in -apron:apron
+                    sum += data[(threadIdx().x-1+(threadIdx().y-1)*blockDim().x)+1+i*blockDim().x] * conv[apron+1+i]
+                end
+                # out[thisY, thisX-apron-fld(blockNum, blocksInAnImage)*2*apron] = sum
+                out[thisY, thisX] = sum
             end
-            # out[thisY, thisX-apron-fld(blockNum, blocksInAnImage)*2*apron] = sum
-            out[thisY, thisX] = sum
         end
     end
     return
@@ -156,7 +172,7 @@ function doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, 
         for i in 1:layers
             # assuming height <= 1024
             threads_column = 1024 #32 * 32
-            threads_row = (16, 768 ÷ 16)
+            threads_row = (16, 512 ÷ 16)
             while threads_row[2] - 2 * aprons[i] <= 0 && threads_row[1] > 4
                 threads_row = (threads_row[1] ÷ 2, threads_row[2] * 2)
             end
@@ -173,7 +189,7 @@ function doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, 
 
 
                 time_taken += CUDA.@elapsed buffer .= 0
-                time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column col_kernel_strips(img_gpu, conv_gpus[i], buffer, Int32(width), Int16(height), Int8(aprons[i]))
+                time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 32 col_kernel_strips(img_gpu, conv_gpus[i], buffer, Int32(width), Int16(height), Int8(aprons[i]))
                 # kernel = @cuda name = "col" launch = false col_kernel_strips(img_gpu, conv_gpus[1], buffer, Int32(width), Int16(height), Int8(aprons[i]))
                 # println(launch_configuration(kernel.fun))
                 # kernel = @cuda name = "row" launch = false row_kernel(buffer, conv_gpus[i], out_gpus[j][i], Int16(height - 2 * aprons[i]), Int16(height), Int32(width), Int16(imgWidth), Int8(aprons[i]))
@@ -214,7 +230,7 @@ end
 
 let
     println("Here we go!")
-    nImages = 1
+    nImages = 16
     img = []
     imgWidth = 0
     time_taken = 0
@@ -258,7 +274,9 @@ let
             out_gpu = CUDA.zeros(Float32, cld(height, (2^(j - 1))), cld(width, (2^(j - 1))))
             push!(out_gpus_octave, out_gpu)
             if j == 1
-                kernel = reshape(getGaussianKernel(2 * aprons[i] + 1, schemas[i][:sigma]), 2 * aprons[i] + 1)
+                # kernel = reshape(getGaussianKernel(2 * aprons[i] + 1, schemas[i][:sigma]), 2 * aprons[i] + 1)
+                # push!(conv_gpus, CuArray(kernel))
+                kernel = getGaussianKernel(2 * aprons[i] + 1, schemas[i][:sigma])
                 push!(conv_gpus, CuArray(kernel))
             end
         end
@@ -273,9 +291,9 @@ let
     #     warmupout_gpu = CUDA.zeros(Float32, 1080 - 2 * aprons[i], 1920 - 2 * aprons[i])
     #     push!(warmupout_gpus, warmupout_gpu)
     # end
-    doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, aprons, height, width, imgWidth, layers, octaves)
-    println("Warmup done!")
-    iterations = 10
+    # doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, aprons, height, width, imgWidth, layers, octaves)
+    # println("Warmup done!")
+    iterations = 1
     for i in 1:iterations
         time_taken += doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, aprons, height, width, imgWidth, layers, octaves)
     end
