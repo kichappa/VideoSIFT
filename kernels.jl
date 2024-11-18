@@ -2,11 +2,14 @@ function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron
     let
         blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
         threadNum::UInt16 = threadIdx().x - 1
-        threads::Int16 = blockDim().x
+        # threads::Int16 = blockDim().x
 
+        if blockNum == 0 && threadNum == 0
+            @cuprintln("COL: size of inp: $(size(inp)), size of out/buffer: $(size(buffer))")
+        end
         # there could be more blocks than needed
-        # thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (blockDim().x - 2 * apron))) + 1 # 1-indexed
-        thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
+        # thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
+        thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (blockDim().x - 2 * apron))) + 1 # 1-indexed
         thisY::Int16 = blockNum % cld((height - 2 * apron), (blockDim().x - 2 * apron)) * (blockDim().x - 2 * apron) + (threadIdx().x - 1) + 1 # 1-indexed
         thisPX::Int32 = 0
 
@@ -20,6 +23,10 @@ function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron
         end
         sync_threads()
 
+        # if threadNum == 0
+        #     @cuprintln("Shared memory filled in block $blockNum")
+        # end
+
         # convolution
         if apron < thisY <= height - apron && thisX <= width && apron <= (threadIdx().x - 1) < (blockDim().x) - apron
             sum::Float32 = 0.0
@@ -28,6 +35,53 @@ function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron
                 # sum += data[threadIdx().x+i] * conv[apron+1+i]
             end
             buffer[thisY, thisX] = sum
+            # buffer[thisY-apron, thisX-apron] = sum
+        end
+    end
+    return
+end
+
+function col_kernel_strips_2(inp, conv, buffer, width::Int32, height::Int16, imgWidth::Int16, iApron::Int8, apron::Int8)
+    let
+        blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+        threadNum::UInt16 = threadIdx().x - 1
+        # threads::Int16 = blockDim().x
+
+        if blockNum == 0 && threadNum == 0
+            @cuprint("COL: size of inp: $(size(inp)), size of out/buffer: $(size(buffer))")
+        end
+        # there could be more blocks than needed
+        # thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
+        thisX::Int32 = iApron + 2 * iApron * (blockNum ÷ UInt32((imgWidth - 2 * iApron) * cld((height - 2 * apron), (blockDim().x - 2 * apron)))) + blockNum ÷ Int32(cld((height - 2 * apron), (blockDim().x - 2 * apron))) + 1 # 1-indexed
+        thisY::Int16 = iApron + (blockNum % cld((height - 2 * apron), (blockDim().x - 2 * apron)) * (blockDim().x - 2 * apron) + threadNum + 1) # 1-indexed
+        thisPX::Int32 = 0
+
+        data = CuDynamicSharedArray(Float32, blockDim().x)
+
+        # fill the shared memory
+        if iApron < thisY <= height - iApron && iApron < thisX <= width - iApron
+            thisPX = thisY + (thisX - 1) * height
+            data[threadNum+1] = inp[thisPX]
+            # data[threadIdx().x] = inp[thisPX]
+            if blockNum < UInt32(cld((height - 2 * apron), (blockDim().x - 2 * apron)))
+                @cuprintln("thisX: $thisX, thisY: $thisY, thisPX: $thisPX")
+            end
+        end
+        sync_threads()
+
+        # if threadNum == 0
+        #     @cuprintln("Shared memory filled in block $blockNum")
+        # end
+
+        # convolution
+        if (apron + iApron) < thisY <= height - (apron + iApron) && iApron < thisX <= width - iApron && apron <= (threadIdx().x - 1) < (blockDim().x) - apron
+            sum::Float32 = 0.0
+            for i in -apron:apron
+                sum += data[threadNum+1+i] * conv[apron+1+i]
+                # sum += data[threadIdx().x+i] * conv[apron+1+i]
+            end
+            buffer[thisY, thisX] = sum
+            # buffer[thisY-apron, thisX-apron] = sum
         end
     end
     return
@@ -40,6 +94,10 @@ function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, img
     # threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
     # threads::Int16 = blockDim().x * blockDim().y
 
+
+    if blockNum == 0 && (threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x) == 0
+        @cuprintln("ROW: size of inp: $(size(inp)), size of out: $(size(out))")
+    end
     if true #threads <= width
 
         # blocksInACol::Int8 = cld(inpH, blockDim().x)
@@ -87,6 +145,7 @@ function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, img
                 end
                 # out[thisY, thisX-apron-fld(blockNum, blocksInAnImage)*2*apron] = sum
                 out[thisY, thisX] = sum
+                # out[thisY-apron, thisX-apron] = sum
             end
         end
     end
@@ -119,8 +178,39 @@ function resample_kernel(inp, out)
     # if threadNum % 100 == 0
     #     @cuprintln("thisPX: $thisPX, outPX: $outPX, h: $h, w: $w")
     # end
-    if outPX <= (h * w) ÷ 4
+    if outPX <= ((h ÷ 2) * (w ÷ 2))
         out[outPX] = data[threadNum+1]
     end
+    return
+end
+
+function resample_kernel_2(inp, out, h, w)
+    blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+    threadNum::UInt16 = threadIdx().x - 1
+    threads::Int16 = blockDim().x
+
+    # data = CuDynamicSharedArray(Float32, threads)
+
+    # h, w = size(inp)
+    if blockNum == 0 && threadNum == 0
+        @cuprintln("SMPL: h: $h, w: $w, size of inp: $(size(inp)), size of out: $(size(out))")
+    end
+    outPX::Int32 = blockNum * threads + threadNum + 1
+    outX::Int32 = (outPX - 1) ÷ (h ÷ 2) # 0-indexed
+    outY::Int16 = (outPX - 1) % (h ÷ 2) # 0-indexed
+
+    thisX::Int32 = 2 * outX # 0-indexed
+    thisY::Int16 = 2 * outY # 0-indexed
+    thisPX::Int32 = thisY + thisX * h + 1
+
+    # fill the shared memory
+    if thisPX <= h * w && outPX <= ((h ÷ 2) * (w ÷ 2))
+        out[outPX] = inp[thisPX]
+    end
+    # sync_threads()
+
+    # if outPX <= ((h ÷ 4) * (w ÷ 4))
+    #     out[outPX] = data[threadNum+1]
+    # end
     return
 end
