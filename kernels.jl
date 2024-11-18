@@ -63,9 +63,9 @@ function col_kernel_strips_2(inp, conv, buffer, width::Int32, height::Int16, img
             thisPX = thisY + (thisX - 1) * height
             data[threadNum+1] = inp[thisPX]
             # data[threadIdx().x] = inp[thisPX]
-            if blockNum < UInt32(cld((height - 2 * apron), (blockDim().x - 2 * apron)))
-                @cuprintln("thisX: $thisX, thisY: $thisY, thisPX: $thisPX")
-            end
+            # if blockNum < UInt32(cld((height - 2 * apron), (blockDim().x - 2 * apron)))
+            #     @cuprintln("thisX: $thisX, thisY: $thisY, thisPX: $thisPX")
+            # end
         end
         sync_threads()
 
@@ -148,6 +148,45 @@ function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, img
                 # out[thisY-apron, thisX-apron] = sum
             end
         end
+    end
+    return
+end
+
+function row_kernel_2(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16, iApron::Int8, apron::Int8)
+    # FOR CUDA registers, x is vertical and y is horizontal. So, threadIdx().x is vertical and threadIdx().y is horizontal
+    blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+    threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
+    threads::Int16 = blockDim().x * blockDim().y
+
+    blocksInACol::Int8 = cld(height - 2 * (iApron + apron), blockDim().x)
+    blocksInARow::Int16 = cld(imgWidth - 2 * (iApron + apron), blockDim().y - 2 * apron)
+    blocksInAnImage::Int16 = blocksInACol * blocksInARow
+
+    thisY::Int16 = iApron + apron + (blockNum % blocksInACol) * blockDim().x + threadIdx().x # 1-indexed
+    thisX::Int32 = iApron + (blockNum ÷ blocksInAnImage) * imgWidth  + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2 * apron) + threadIdx().y # 1-indexed
+
+    data = CuDynamicSharedArray(Float32, threads)
+
+    # fill the shared memory
+    begin
+        if (iApron + apron) < thisY <= height - (iApron + apron) && iApron < thisX <= width - iApron
+            thisPX::Int32 = thisY + (thisX - 1) * height
+            data[threadNum+1] = inp[thisPX]
+        end
+    end
+    sync_threads()
+
+    # thisIsAComputationThread::Bool = (iApron + apron) < thisY <= height - (iApron + apron) && (iApron + apron) < thisX <= width - (iApron + apron) && apron < threadIdx().y <= blockDim().y - apron
+    # if (blockNum % blocksInAnImage) % blocksInACol == blocksInACol - 1
+    #     thisIsAComputationThread = thisIsAComputationThread && (thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth - 2 * (iApron + apron))
+    # end
+    thisIsAComputationThread::Bool = ((iApron + apron) < thisY <= height - (iApron + apron)) && ((iApron + apron) < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth - (iApron + apron)) && (apron < threadIdx().y <= blockDim().y - apron) && (iApron + apron) < thisX <= width - (iApron + apron)
+    if thisIsAComputationThread
+        sum::Float32 = 0.0
+        for i in -apron:apron
+            sum += data[threadNum+1+i*blockDim().x] * conv[apron+1+i]
+        end
+        out[thisY, thisX] = sum
     end
     return
 end

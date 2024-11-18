@@ -83,6 +83,8 @@ function findBlobs(img_gpu, out_gpus, conv_gpus, buffer, height, width, imgWidth
         k = 2^(1 / (scales - 3))
     end
     time_taken = 0
+    accumulative_apron = 0
+    resample_apron = 0
     for octave in 1:octaves
         accumulative_apron = 0
         for layer in 1:scales
@@ -113,6 +115,7 @@ function findBlobs(img_gpu, out_gpus, conv_gpus, buffer, height, width, imgWidth
                         # take the previous octave's third last output, resample it and take it as input
                         println("Height: $(height*2), Width: $(width*2), Resampling with blockDim: $(makeThisNearlySquare(((height * width) ÷ (1024), 1)))")
                         time_taken += CUDA.@elapsed @cuda threads = 1024 blocks = makeThisNearlySquare(((height * width) ÷ (1024), 1)) resample_kernel_2(out_gpus[octave-1][scales-2], out_gpus[octave][1], height * 2, width * 2)
+                        # accumulative_apron = resample_apron
                         CUDA.synchronize()
                         # save the resampled image
                         save("assets/resampled_g_o$(octave-1)_l$(scales-2).png", colorview(Gray, collect(out_gpus[octave][1])))
@@ -126,11 +129,15 @@ function findBlobs(img_gpu, out_gpus, conv_gpus, buffer, height, width, imgWidth
                     CUDA.synchronize()
                     println(", iApron: $(accumulative_apron), Apron: $(apron)")
                     save("assets/gaussian_o$(octave)_l$(layer)_c.png", colorview(Gray, collect(buffer)))
-                    time_taken += CUDA.@elapsed @cuda threads = threads_row blocks = blocks_row shmem = shmem_row maxregs = 32 row_kernel(buffer, conv_gpus[layer-1], out_gpus[octave][layer], Int16(height - 2 * apron), Int16(height), Int32(width), Int16(imgWidth), Int8(apron))
+                    # time_taken += CUDA.@elapsed @cuda threads = threads_row blocks = blocks_row shmem = shmem_row maxregs = 32 row_kernel(buffer, conv_gpus[layer-1], out_gpus[octave][layer], Int16(height - 2 * apron), Int16(height), Int32(width), Int16(imgWidth), Int8(apron))
+                    time_taken += CUDA.@elapsed @cuda threads = threads_row blocks = blocks_row shmem = shmem_row maxregs = 32 row_kernel_2(buffer, conv_gpus[layer-1], out_gpus[octave][layer], Int16(height), Int32(width), Int16(imgWidth), Int8(accumulative_apron), Int8(apron))
                     CUDA.synchronize()
                 end
                 save("assets/gaussian_o$(octave)_l$(layer)_rc.png", colorview(Gray, collect(out_gpus[octave][layer])))
                 accumulative_apron += apron
+                if layer == scales - 2
+                    resample_apron = accumulative_apron/2
+                end
             end
         end
         height = height ÷ 2
@@ -174,11 +181,11 @@ let
         time_taken += findBlobs(img_gpu, out_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
         # findBlobs(img_gpu, height, width, imgWidth, octaves, layers, sigma0, k)
     end
-    for j in 1:octaves
-        for i in 1:layers
-            save("assets/DoG_o$(j)l$(i).png", colorview(Gray, Array(out_gpu[j][i])))
-        end
-    end
+    # for j in 1:octaves
+    #     for i in 1:layers
+    #         save("assets/DoG_o$(j)l$(i).png", colorview(Gray, Array(out_gpu[j][i])))
+    #     end
+    # end
     println()
 
     # need to debug the resample kernel. So let's just take the img_gpu and resample it multiple times and save the output
