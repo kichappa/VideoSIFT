@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 assets/videos/*
-assets/images/*
+# assets/images/*
 # *.png
 
 # !assets/videos/DJI_20240329_154936_17_null_beauty.mp4
