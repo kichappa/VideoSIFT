@@ -1,38 +1,52 @@
 using CUDA
-using BenchmarkTools
 
-# arr = rand(32, 32, 1200)
+# define a new arrays of 64 elements, and fill it with random ones and zeros
+a = rand(0:1, 1024*5)
 
-# function mykernel2(inp)
-#     x = threadIdx().x
-#     y = threadIdx().y
-#     z = blockIdx().x
+a_gpu = CuArray(a)
+b_gpu = CUDA.zeros(Int64, 1024*5)
+count = CUDA.zeros(Int64, 1)
 
-#     if x <= 32 && y <= 32
-#         @inbounds inp[y, x, z] += 1
-#     end
+function mykernel!(in, out, count)
+	threadNum = threadIdx().x + blockDim().x * (blockIdx().x-1) # 1-indexed
+	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
+	laneNum = (threadIdx().x - 1) % 32 # 0-indexed
 
-#     return
-# end
+    shared_count = CuDynamicSharedArray(Int64, 1)
+    
+    if threadNum == 1
+        shared_count[1] = 0
+    end
+    sync_threads()
 
-# arr_GPU = CuArray(arr)
+    if threadNum <= 1024*5
+        is_nonzero = in[threadNum] != 0
+        mask = CUDA.vote_ballot_sync(0xffffffff, is_nonzero)
+        warp_count = count_ones(mask)
 
-# @cuda threads = (32, 32) blocks = 1200 mykernel2(arr_GPU)
+        warp_offset = 0
+        if laneNum == 0
+            warp_offset = CUDA.atomic_add!(pointer(shared_count), warp_count)
+        end
+        warp_offset = CUDA.shfl_sync(0xffffffff, warp_offset, 1) #<<<<< This is the BUG code.
 
-# time_taken = 0
-# for i in 1:100
-#     start_t = time_ns()
-#     global arr_GPU = CuArray(arr)
-#     @cuda threads = (32, 32) blocks = 1200 mykernel2(arr_GPU)
-#     end_t = time_ns()
-#     global time_taken += (end_t - start_t) / 1e6
-# end
+        if is_nonzero
+            index = count_ones(mask & ((1 << laneNum) - 1)) + warp_offset
+            out[index+1] = threadNum
+        end
+    end
+    sync_threads()
 
-# println("Time: ", time_taken / 100, " ms")
-
-function mykernel()
-    @cuprintln("blockdim: ", blockDim().x, " ", blockDim().y, " ", blockDim().z)
-    return
+    if threadIdx().x == 1
+        CUDA.atomic_add!(CUDA.pointer(count), shared_count[1])
+    end
+	return
 end
 
-@cuda threads = (2, 3) blocks = 1 mykernel()
+@cuda threads = 1024 blocks = 5 shmem=sizeof(Int64) mykernel!(a_gpu, b_gpu, count)
+
+println("nonzeros:$(collect(count))")
+println(a)
+println("----------------")
+println(collect(b_gpu))
+

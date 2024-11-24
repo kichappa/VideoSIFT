@@ -54,7 +54,7 @@ function col_kernel_strips_2(inp, conv, buffer, width::Int32, height::Int16, img
 		data = CuDynamicSharedArray(Float32, blockDim().x)
 
 		# fill the shared memory
-		if iApron < thisY <= height - iApron && iApron < thisX <= width - iApron && 0< thisPX <= height * width
+		if iApron < thisY <= height - iApron && iApron < thisX <= width - iApron && 0 < thisPX <= height * width
 			data[threadNum+1] = inp[thisPX]
 		end
 		sync_threads()
@@ -419,6 +419,54 @@ function testBlobs(l3, l2, l1, out2, out1, h, w, imgWidth, ap4)
 		out2[thisPX] = data[threadNum+blockDim().x*blockDim().y]
 		# out1[thisPX] = shouldIProcess*(l2[thisPX] - l1[thisPX])
 		# out2[thisPX] = shouldIProcess*(l3[thisPX] - l2[thisPX])
+	end
+	return
+end
+
+function extract_blobs(d1, xy, h, w, imgWidth, count, oct, lay)
+	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
+	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
+	laneNum = (threadIdx().x - 1) % 32 # 0-indexed
+
+	# shared_count = CuDynamicSharedArray(UInt64, 1+32*2)
+	shared_count = CuDynamicSharedArray(UInt64, 1)
+
+	if threadIdx().x == 1
+		shared_count[1] = 0
+	end
+	sync_threads()
+
+	warp_offset::UInt64 = 0
+	# is_nonzero = false
+	if threadNum <= h * w
+		# is_nonzero = d1[threadNum] != 0
+		sync_warp()
+		mask = CUDA.vote_ballot_sync(0xffffffff, d1[threadNum] != 0)
+		warp_count::UInt64 = count_ones(mask)
+
+		if laneNum == 0
+			warp_offset = CUDA.atomic_add!(pointer(shared_count, 1), warp_count)
+		end
+		warp_offset = CUDA.shfl_sync(0xffffffff, warp_offset, 1)
+	end
+	sync_threads()
+
+	if threadIdx().x == 1
+		shared_count[1] = CUDA.atomic_add!(CUDA.pointer(count, 1), shared_count[1])
+	end
+	sync_threads()
+	if threadNum <= h * w && d1[threadNum] != 0
+		index = shared_count[1] + warp_offset + count_ones(mask & ((1 << laneNum) - 1)) # 0-indexed
+		thisY = (threadNum - 1) % h + 1
+		thisX = ((threadNum - 1) ÷ h) % imgWidth + 1
+		thisImg = ((threadNum - 1) ÷ h) ÷ imgWidth + 1
+		# i(#1),j(#0) ==> i + (j) * 3 # 1-indexed
+		xy[1+index*6] = thisX
+		xy[2+index*6] = thisY
+		xy[3+index*6] = thisImg
+		xy[4+index*6] = ((threadNum - 1) ÷ h) + 1
+		xy[5+index*6] = oct
+		xy[6+index*6] = lay
 	end
 	return
 end
