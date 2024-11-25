@@ -1,16 +1,13 @@
-import OpenCV.getGaussianKernel
+using CUDA
 
-
-function getGaussianKernelalt(ksize, sigma)
-    kernel = zeros(Float32, ksize)
-    kernel = exp.(-0.5 * ((0:ksize-1) .- (ksize - 1) / 2) .^ 2 / sigma^2)
-    kernel = kernel ./ sum(kernel)
-    return kernel
+function kernel(a)
+    CUDA.atomic_add!(pointer(a, 1), 1)
+    return
 end
 
-k = 11
-sigma = 5.4
+a = 1
+b = CuArray([a])
+@cuda threads = 5 blocks = 1 kernel(b)
 
-println(reshape(getGaussianKernel(k, sigma), k))
-println(getGaussianKernelalt(k, sigma))
-println(round.(reshape(getGaussianKernel(k, sigma), k) .- getGaussianKernelalt(k, sigma), digits=5))
+println(collect(b))
+println(a)

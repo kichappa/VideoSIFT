@@ -423,7 +423,7 @@ function testBlobs(l3, l2, l1, out2, out1, h, w, imgWidth, ap4)
 	return
 end
 
-function extract_blobs(d1, xy, h, w, imgWidth, count, oct, lay)
+function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
 	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
 	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
 	laneNum = (threadIdx().x - 1) % 32 # 0-indexed

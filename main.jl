@@ -61,7 +61,7 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0=1.6
     conv_gpu = []
     out_gpu = []
     DoG_gpu = []
-    XY_gpu = []
+    XY_gpu = nothing
     for octave in 1:octaves
         prev_mid_size = [height, width]
 
@@ -69,21 +69,19 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0=1.6
             if layer == 1
                 push!(out_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
                 push!(DoG_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
-                push!(XY_gpu, [CUDA.zeros(Int32, 6, Integer(cld(height * 0.00144, (2^(octave - 1))) * cld(width, (2^(octave - 1)))))])
+                if octave ==1
+                    XY_gpu=CUDA.zeros(Int32, 6, ceil(Integer, 0.0025 * height * width))
+                end
             else
                 push!(out_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
                 if layer < layers
                     push!(DoG_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
-                end
-                if layer < layers - 2
-                    push!(XY_gpu[octave], CUDA.zeros(Int32, 6, Integer(cld(height * 0.00144, (2^(octave - 1))) * cld(width, (2^(octave - 1))))))
                 end
             end
             # create the convolution kernel
             if octave == 1 && layer < layers
                 sigma = sigma0 * k^(layer - 1)
                 apron = ceil(Int, 3 * sigma / 2) * 2
-                # println("Creating kernel with sigma: $(k^(layer - 1)) and apron: $apron for layer: $layer")
                 push!(conv_gpu, CuArray(getGaussianKernel(2 * apron + 1, sigma)))
             end
         end
@@ -225,18 +223,22 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, conv_gpu, buffer, height, width, i
     return time_taken
 end
 
-function extractBlobXYs(DoG_gpu, XY_gpu, octaves, scales, height, width, imgWidth)
+function extractBlobXYs(DoG_gpu, XY_gpu, octaves, scales, height, width, imgWidth, sigma0=1.6, k=-1)
+    if k == -1
+        k = 2^(1 / (scales - 3))
+    end
     time_taken = 0
-    count = []
+    count_gpu = CuArray{UInt64}([0])
+    counts = []
+    radii = []
+    px = 0
     for octave in 1:octaves
-        o_count = []
         for layer in 1:scales-3
-            count_gpu = CUDA.zeros(UInt64, 1)
             threads = 1024
             blocks = cld(height * width, threads)
-            time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Int64) * (1 + 32 * 2)) extract_blobs(
+            time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Int64) * (1 + 32 * 2)) stream_compact(
                 DoG_gpu[octave][layer],
-                XY_gpu[octave][layer],
+                XY_gpu,
                 height,
                 width,
                 Int16(imgWidth / 2^(octave - 1)),
@@ -244,25 +246,29 @@ function extractBlobXYs(DoG_gpu, XY_gpu, octaves, scales, height, width, imgWidt
                 octave,
                 layer+1
             )
-            push!(o_count, collect(count_gpu)[1])
+            push!(counts, collect(count_gpu)[1])
+            sigma = sigma0 * k^(layer - 1)
+            push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer) / 2) * 2)
+            px = (2*radii[end] + 1) ^2 * counts[end]
+            println("O$(octave)L$(layer) radius: $(radii[end]) px: $(px/counts[end])")
         end
         height = height ÷ 2
         width = width ÷ 2
-        push!(count, o_count)
     end
-    return time_taken, count
+    count = collect(count_gpu)[1]
+    threads = 1024
+    blocks = cld(px, threads)
+    return time_taken, collect(count_gpu)[1]
 end
 
 let
     println("Here we go!")
-    nImages = 4
+    nImages = 2
     img = []
     imgWidth = 0
     time_taken = 0
     # load the images
     for i in 1:nImages
-        # img_temp = Float32.(Gray.(FileIO.load("assets/images/DJI_20240328_234918_14_null_beauty.mp4_frame_$(i+900).png")))
-
         img_temp = Float32.(Gray.(FileIO.load("assets/images/DJI_20240329_154936_17_null_beauty.mp4_frame_$(i+900).png")))
         if i == 1
             img = img_temp
@@ -282,14 +288,15 @@ let
     k = 2^(1 / (layers - 3))
 
     img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, XY_gpu = getGPUElements(img, height, width, layers, octaves, nImages, sigma0, k)
-    iterations = 5
+    println("Got the GPU elements...")
+    iterations = 1
     count = nothing
     for i in 1:iterations
         time_taken += findBlobs(img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
-        # findBlobs(img_gpu, height, width, imgWidth, octaves, layers, sigma0, k)
         time_taken_here, count = extractBlobXYs(DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth)
         time_taken += time_taken_here
     end
+    println("Got the blobs...")
     for j in 1:octaves
         for i in 1:2
             max = CUDA.maximum(DoG_gpu[j][i])
@@ -300,26 +307,11 @@ let
         end
     end
 
-    XY = collect(XY_gpu)
-    df = nothing
-    c = 0
-    for j in 1:octaves
-        for i in 1:layers-3
-            println("O$(j)L$(i+1) has $(count[j][i]) potential blobs out of $(size(XY[j][i], 2)). Utilization: $(round(count[j][i] / size(XY[j][i], 2)*100, digits=2))%")
-            CSV.write("assets/blobs_o$(j)_l$(i).csv", DataFrame(collect(transpose(XY[j][i])), :auto))
-            c += count[j][i]
-            # if isnothing(df)
-            # 	df = DataFrame(collect(transpose(XY[j][i])), :auto)
-            # else
-            # 	df = vcat(df, DataFrame(collect(transpose(XY[j][i])), :auto))
-            # end
-        end
-    end
-    println("Total potential blobs: $c")
+    XY = collect(XY_gpu[:, 1:count])
+    println("Total potential blobs: $count, utilization: $(round(count / size(XY_gpu, 2)*100, digits=2))%")
+    CSV.write("assets/blobs.csv", DataFrame(collect(transpose(XY)), :auto))
 
-    # CSV.write("assets/blobs.csv", df)
-
-    println("Time taken: $(round(time_taken / (iterations * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time")
+    println("Time taken: $(round(time_taken / (iterations * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time. Total time taken: $(round(time_taken/iterations, digits=5))s")
 end
 
 
