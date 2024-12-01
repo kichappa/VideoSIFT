@@ -1,6 +1,7 @@
 using Images, FileIO, DelimitedFiles, CSV, DataFrames
 include("helper.jl")
 include("kernels.jl")
+# include("kernels_inbounds.jl")
 
 function doLayersConvolvesAndDoGAndOctave(img_gpu, out_gpus, buffer, conv_gpus, aprons, height, width, imgWidth, layers, octaves)
     time_taken = 0
@@ -69,8 +70,8 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0=1.6
             if layer == 1
                 push!(out_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
                 push!(DoG_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
-                if octave ==1
-                    XY_gpu=CUDA.zeros(Int32, 6, ceil(Integer, 0.0025 * height * width))
+                if octave == 1
+                    XY_gpu = CUDA.zeros(Int32, 6, ceil(Integer, 0.0025 * height * width))
                 end
             else
                 push!(out_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
@@ -209,6 +210,7 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, conv_gpu, buffer, height, width, i
                         accumulative_apron + apron,
                         k - 1,
                     )
+                    CUDA.synchronize()
                 end
                 accumulative_apron += apron
                 if layer == scales - 2
@@ -223,42 +225,66 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, conv_gpu, buffer, height, width, i
     return time_taken
 end
 
-function extractBlobXYs(DoG_gpu, XY_gpu, octaves, scales, height, width, imgWidth, sigma0=1.6, k=-1)
+function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width, imgWidth, sigma0=1.6, k=-1, bins=32)
     if k == -1
         k = 2^(1 / (scales - 3))
     end
     time_taken = 0
     count_gpu = CuArray{UInt64}([0])
-    counts = []
-    radii = []
-    px = 0
+    counts = Int[]
+    radii = Int[]
+    height_local = height
+    width_local = width
     for octave in 1:octaves
         for layer in 1:scales-3
             threads = 1024
-            blocks = cld(height * width, threads)
+            blocks = cld(height_local * width_local, threads)
             time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Int64) * (1 + 32 * 2)) stream_compact(
                 DoG_gpu[octave][layer],
                 XY_gpu,
-                height,
-                width,
+                height_local,
+                width_local,
                 Int16(imgWidth / 2^(octave - 1)),
                 count_gpu,
                 octave,
-                layer+1
+                layer + 1
             )
-            push!(counts, collect(count_gpu)[1])
+            CUDA.synchronize()
+            push!(counts, Integer(collect(count_gpu)[1]))
             sigma = sigma0 * k^(layer - 1)
             push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer) / 2) * 2)
-            px = (2*radii[end] + 1) ^2 * counts[end]
-            println("O$(octave)L$(layer) radius: $(radii[end]) px: $(px/counts[end])")
+            println("O$(octave)L$(layer) radius: $(radii[end]), cum count: $(counts[end])")
         end
-        height = height ÷ 2
-        width = width ÷ 2
+        height_local = height_local ÷ 2
+        width_local = width_local ÷ 2
     end
     count = collect(count_gpu)[1]
-    threads = 1024
-    blocks = cld(px, threads)
-    return time_taken, collect(count_gpu)[1]
+    println("counts: $counts")
+    counts_gpu = CuArray(counts)
+    radii_gpu = CuArray(radii)
+    println(radii, maximum(radii))
+    threads = ((maximum(radii) * 2 + 1) + 2 * 1, (maximum(radii) * 2 + 1) + 2 * 1)
+    blocks = count
+    println("Threads: $threads, blocks: $blocks")
+    for i in 1:3
+        println("out_gpu[$i][2]: $(size(out_gpu[i][2]))")
+    end
+    orientation_gpu = CUDA.zeros(Float32, bins, count)
+
+    time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Float32) * ((maximum(radii) * 2 + 1) + 2 * 1)^2) find_orientations(
+        out_gpu[3][2],
+        out_gpu[2][2],
+        out_gpu[1][2],
+        XY_gpu,
+        orientation_gpu,
+        height,
+        width,
+        counts_gpu,
+        radii_gpu,
+        bins
+    )
+    CUDA.synchronize()
+    return time_taken, count
 end
 
 let
@@ -281,8 +307,8 @@ let
     height, width = size(img)
     println(size(img))
 
-    octaves = 3
-    layers = 5
+    octaves = 3 # hard coded in the blobs kernel
+    layers = 5 # hard coded in the extractBlobXYs function and orientation kernel
 
     sigma0 = 1.6
     k = 2^(1 / (layers - 3))
@@ -293,7 +319,7 @@ let
     count = nothing
     for i in 1:iterations
         time_taken += findBlobs(img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
-        time_taken_here, count = extractBlobXYs(DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth)
+        time_taken_here, count = extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth)
         time_taken += time_taken_here
     end
     println("Got the blobs...")
