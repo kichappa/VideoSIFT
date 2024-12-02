@@ -262,16 +262,15 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
     println("counts: $counts")
     counts_gpu = CuArray(counts)
     radii_gpu = CuArray(radii)
-    println(radii, maximum(radii))
+    # println(radii, maximum(radii))
     threads = ((maximum(radii) * 2 + 1) + 2 * 1, (maximum(radii) * 2 + 1) + 2 * 1)
-    blocks = count
-    println("Threads: $threads, blocks: $blocks")
-    for i in 1:3
-        println("out_gpu[$i][2]: $(size(out_gpu[i][2]))")
-    end
+    # println("Threads: $threads, blocks: $count")
+    # for i in 1:3
+    #     println("out_gpu[$i][2]: $(size(out_gpu[i][2]))")
+    # end
     orientation_gpu = CUDA.zeros(Float32, bins, count)
 
-    time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Float32) * ((maximum(radii) * 2 + 1) + 2 * 1)^2) find_orientations(
+    time_taken += CUDA.@elapsed @cuda threads = threads blocks = count shmem = (sizeof(Float32) * (((maximum(radii) * 2 + 1) + 2 * 1)^2 + bins)) find_orientations(
         out_gpu[3][2],
         out_gpu[2][2],
         out_gpu[1][2],
@@ -284,7 +283,15 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
         bins
     )
     CUDA.synchronize()
-    return time_taken, count
+    # save orientation_gpu as csv
+    CSV.write("assets/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
+    filtered_XY_gpu = CUDA.zeros(Float32, bins + 4, count)
+    filtered_count_gpu = CuArray{UInt64}([0])
+    println("Size of XY_gpu: $(size(XY_gpu)), size of filtered_XY_gpu: $(size(filtered_XY_gpu))")
+    time_taken += CUDA.@elapsed @cuda threads = (32, 512 ÷ 32) blocks = cld(count, 512 ÷ 32) shmem = (sizeof(Float32) * 32 * 32 + sizeof(UInt64)) filter_blobs(XY_gpu, orientation_gpu, filtered_XY_gpu, count, filtered_count_gpu, bins)
+    CUDA.synchronize()
+    CSV.write("assets/filtered_XY_i.csv", DataFrame(collect(transpose(collect(filtered_XY_gpu))), :auto))
+    return time_taken, count, collect(orientation_gpu), collect(filtered_XY_gpu)
 end
 
 let
@@ -317,9 +324,12 @@ let
     println("Got the GPU elements...")
     iterations = 1
     count = nothing
+    orientations = nothing
+    blobs = nothing
     for i in 1:iterations
         time_taken += findBlobs(img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
-        time_taken_here, count = extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth)
+        # keep bins < 32 so that one warp handles one point
+        time_taken_here, count, orientations, blobs = extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth)
         time_taken += time_taken_here
     end
     println("Got the blobs...")
@@ -336,6 +346,8 @@ let
     XY = collect(XY_gpu[:, 1:count])
     println("Total potential blobs: $count, utilization: $(round(count / size(XY_gpu, 2)*100, digits=2))%")
     CSV.write("assets/blobs.csv", DataFrame(collect(transpose(XY)), :auto))
+    CSV.write("assets/orientations.csv", DataFrame(collect(transpose(orientations)), :auto))
+    CSV.write("assets/filtered_blobs.csv", DataFrame(collect(transpose(blobs)), :auto))
 
     println("Time taken: $(round(time_taken / (iterations * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time. Total time taken: $(round(time_taken/iterations, digits=5))s")
 end

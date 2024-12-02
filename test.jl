@@ -12,16 +12,23 @@ function kernel(a, b, c)
     point2[2, 2] = 6
     return
 end
+# d = CuDynamicSharedArray(Float32, 2, sizeof(Float32)*2)
 
-function kernel2(a, b)
-    c = CuDynamicSharedArray(Float32, 2)
-    d = CuDynamicSharedArray(Float32, 2, sizeof(Float32)*2)
-    c[1] = a
-    c[2] = b
-    d[1] = b
-    d[2] = a
-    @cuprintln(c[1], c[2])
-    @cuprintln(d[1], d[2])
+function kernel2(a)
+    @assert a == 1 "a should be 1"
+    c_shared = CuDynamicSharedArray(Float32, 2)
+    if threadIdx().x == 1
+        c_shared[1] = 0.0
+        c_shared[2] = 0.0
+    end
+    sync_threads()
+
+    if threadIdx().x % 2 == 0
+        CUDA.atomic_add!(pointer(c_shared, 1), Float32(1.0))
+    else
+        CUDA.atomic_add!(CUDA.pointer(c_shared, 2), Float32(1.0))
+    end
+    sync_threads()
     return
 end
 
@@ -35,4 +42,4 @@ end
 
 a = 1
 b = 2
-@cuda threads = 1 blocks = 1 shmem=sizeof(Float32)*4 kernel2(a, b)
+@cuda threads = 10 blocks = 1 shmem=sizeof(Float32)*2 kernel2(1)
