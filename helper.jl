@@ -1,4 +1,4 @@
-using CUDA
+using CUDA, Printf
 
 function getGaussianKernel(ksize, sigma)
     kernel = CUDA.zeros(Float32, ksize)
@@ -48,4 +48,18 @@ function makeThisNearlySquare(blocks)
     else
         return Int32.((Y, cld(product, Y)))
     end
+end
+
+function format_number(x)
+    if abs(x) == 0 || (abs(x) >= 0.0001 && abs(x) < 100000 && (round(x, digits=5) - x )<= 0.00001)
+        return round(x, digits=5)
+    else
+        return @sprintf("%.4e", x)
+    end
+end
+
+import Base.println
+println(s::String) = begin
+    println(stdout, s)
+    flush(stdout)
 end

@@ -544,7 +544,7 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
     sync_threads()
 
     let
-        if 1 < x < h && 1 < y < w && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1
+        if 1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1
             # if threadIdx().x == 9 && threadIdx().y == 9 && blockIdx().x == 30
             #     @cuprintln("oSize: $(size(o)) h: $h, w: $w, x: $x, y: $y, threadNum: $threadNum, subset: $subset, radius: $(radii[subset]), threadIdx XY: $(threadIdx().x), $(threadIdx().y), dataSize: $((2 * radii[subset] + 1 + 2 * 1)^2)")
             # end
@@ -552,8 +552,9 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
             dx = data[threadNum+(2*radii[subset]+1+2)] - data[threadNum-(2*radii[subset]+1+2)]
             weight = 1 / (sqrt(2 * pi) * radii[subset]) * exp(-((threadIdx().x - radii[subset] - 1)^2 + (threadIdx().y - radii[subset] - 1)^2) / (2 * radii[subset]^2))
             magnitude = sqrt(dy^2 + dx^2) / 4
-            bin::Int32 = fld(atan(dy, dx), 2 * pi / bins) + 1
-            val::Float32 = atan(dy, dx) * weight * magnitude
+            # bin::Int32 = fld(atan(dy, dx), 2 * pi / bins) + 1
+            bin::Int32 = fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1
+            val::Float32 = weight * magnitude # * atan(dy, dx)
             CUDA.atomic_add!(pointer(orientation, bin), val)
             # @inbounds out[bin+blockIdx().x*bins] = val
         end
@@ -564,7 +565,7 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
     return
 end
 
-function filter_blobs(pointXY, orientations, out, count, outCount, bins)
+function filter_blobs(pointXY, orientations, out, count, outCount, bins, threshold=3)
     # assert bins <= 32
     @assert bins <= 32 "Number of bins should be less than 33"
     l_threadNum = threadIdx().x + blockDim().x * (threadIdx().y - 1) # 1-indexed
@@ -572,9 +573,9 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins)
 
     # shared_count = CuDynamicSharedArray(UInt64, 1+32*2)
     shared_count = CuDynamicSharedArray(UInt64, 1)
-    shared_orientations = CuDynamicSharedArray(Float32, (blockDim().x, blockDim().y))
+    shared_orientations = CuDynamicSharedArray(Float32, (blockDim().x, blockDim().y), sizeof(UInt64))
 
-    if threadIdx().x == 1
+    if threadIdx().x == 1 && threadIdx().y == 1
         shared_count[1] = 0
     end
     shared_orientations[threadIdx().x, threadIdx().y] = 0.0
@@ -587,14 +588,14 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins)
         #     @cuprintln("orientations[1, $(((blockIdx().x-1)*blockDim().y + threadIdx().y))]= $(orientations[7, 1])")
         # end
         # shared_orientations[threadIdx().x, threadIdx().y] = orientations[l_threadNum+((blockIdx().x-1)*blockDim().y)*bins]
-        shared_orientations[threadIdx().x, threadIdx().y] = orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y + threadIdx().y]
-        if blockIdx().x == 1 && threadIdx().y == 1
-            @cuprintln("orientations[$(threadIdx().x), $(((blockIdx().x-1)*blockDim().y + threadIdx().y))]= $(orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y + threadIdx().y]) shared_orientations[$(threadIdx().x), $(threadIdx().y)]: $(shared_orientations[threadIdx().x, threadIdx().y])")
-        end
+        shared_orientations[threadIdx().x, threadIdx().y] = orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y+threadIdx().y]
+        # if blockIdx().x == 1 && threadIdx().y == 1
+        #     @cuprintln("orientations[$(threadIdx().x), $(((blockIdx().x-1)*blockDim().y + threadIdx().y))]= $(orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y + threadIdx().y]) shared_orientations[$(threadIdx().x), $(threadIdx().y)]: $(shared_orientations[threadIdx().x, threadIdx().y])")
+        # end
     end
     sync_threads()
 
-    coeff_of_variation = let
+    coeff_of_variation, prod = let
         # for each warp, calculate sum of orientations
         local_mean = shared_orientations[threadIdx().x, threadIdx().y]
         sync_warp()
@@ -602,20 +603,8 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins)
             local_mean += CUDA.shfl_down_sync(0xffffffff, local_mean, 1 << offset)
         end
         local_mean = CUDA.shfl_sync(0xffffffff, local_mean, 1)
-        if blockIdx().x == 1 && threadIdx().y == 1
-            @cuprintln("blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], local_mean: $local_mean")
-        end
         local_mean = local_mean / bins
-        if blockIdx().x == 1 && threadIdx().y == 1
-            @cuprintln("blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], local_mean: $local_mean")
-        end
-        
-        # if blockIdx().x % 100 == 0 && threadIdx().y % 8 == 0 && threadIdx().x == 1
-        #     @cuprintln("blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], local_mean: $local_mean")
-        #     for i in 1:bins
-        #         @cuprintln("\tblockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], shared_orientations[$i, $(threadIdx().y)]: $(shared_orientations[i, threadIdx().y])")
-        #     end
-        # end
+
         local_deviation = 0.0
         if threadIdx().x <= bins
             local_deviation = (shared_orientations[threadIdx().x, threadIdx().y] - local_mean)
@@ -623,53 +612,64 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins)
         end
         sync_warp()
 
-        if blockIdx().x == 1 && threadIdx().y == 1
-            @cuprintln("blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], local_mean: $local_mean, local_deviation: $local_deviation")
-        end
-
         # for each warp, calculate sum of squared differences
         for offset in 4:-1:0
             local_deviation += CUDA.shfl_down_sync(0xffffffff, local_deviation, 1 << offset)
         end
         local_deviation = CUDA.shfl_sync(0xffffffff, local_deviation, 1)
         local_deviation = sqrt(local_deviation / bins)
-        if blockIdx().x == 1 && threadIdx().y == 1
-            @cuprintln("blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], local_mean: $local_mean, local_deviation: $local_deviation, coeff_of_variation: $(local_deviation / local_mean)")
+        if local_mean == 0
+            # return INT MAX
+            typemax(Float32), local_mean
+        else
+            local_deviation / local_mean, local_mean
         end
-        local_deviation / local_mean
-
     end
 
 
-    let
-        thisPoint = 0
-        if coeff_of_variation < 3
-            @cuprintln("blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], coeff_of_variation: $coeff_of_variation")
-            if threadIdx().x == 1
-                thisPoint = CUDA.atomic_add!(CUDA.pointer(shared_count, 1), UInt64(1))
-            end
-            thisPoint = CUDA.shfl_sync(0xffffffff, thisPoint, 1)
-        end
-        sync_threads()
 
-        block_offset = CUDA.atomic_add!(pointer(outCount, 1), shared_count[1])
-        if coeff_of_variation < 3
-            if threadIdx().x <= bins
-                out[(block_offset+thisPoint)*(bins+4)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
-                # out[(block_offset+thisPoint)*(bins+4)+threadIdx().x] = 5.5
+    thisPoint = 0
+    if coeff_of_variation < threshold
+        if threadIdx().x == 1
+            # CUDA.@atomic old = shared_count[1]
+            thisPoint = CUDA.atomic_add!(CUDA.pointer(shared_count, 1), UInt64(1))
+            # @cuprintln("COV: blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], thisPoint: ($thisPoint), coeff_of_variation: $coeff_of_variation")
+        end
+        thisPoint = CUDA.shfl_sync(0xffffffff, thisPoint, 1)
+    end
+    sync_threads()
+
+
+    if threadIdx().x == 1 && threadIdx().y == 1
+        shared_count[1] = CUDA.atomic_add!(pointer(outCount, 1), shared_count[1])
+    end
+    if coeff_of_variation < threshold
+        if threadIdx().x <= bins
+            out[(shared_count[1]+thisPoint)*(bins+5)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
+            if pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y] == 522 && pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y] == 145
+                @cuprintln("orientation[$(threadIdx().x)]: $(shared_orientations[threadIdx().x, threadIdx().y])")# (from $(orientation[threadIdx().x+((blockIdx().x-1)*blockDim().y+threadIdx().y-1)*bins]))")
             end
-            # if threadIdx().x == 1
-            #     out[(block_offset+thisPoint)*(bins+4)+bins+1] = Float32(pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            #     out[(block_offset+thisPoint)*(bins+4)+bins+2] = Float32(pointXY[2+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            #     out[(block_offset+thisPoint)*(bins+4)+bins+3] = Float32(pointXY[5+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            #     out[(block_offset+thisPoint)*(bins+4)+bins+4] = Float32(pointXY[6+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            #     # out[(block_offset+thisPoint)*(bins+4)+bins+1] = 7.6
-            #     # out[(block_offset+thisPoint)*(bins+4)+bins+2] = 7.6
-            #     # out[(block_offset+thisPoint)*(bins+4)+bins+3] = 7.6
-            #     # out[(block_offset+thisPoint)*(bins+4)+bins+4] = 7.6
+            # if ((shared_count[1]+thisPoint) > size(out, 2))
+            #     @cuprintln("block_offset: $(shared_count[1]), thisPoint: $thisPoint, size(out): $(size(out)), threadIdx: [$(threadIdx().x), $(threadIdx().y)]")
             # end
+            # out[(shared_count[1]+thisPoint)*(bins+5) + threadIdx().x] = 56.9
+        end
+        if threadIdx().x == 1
+            out[(shared_count[1]+thisPoint)*(bins+5)+1+bins] = Float32(pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y])
+            out[(shared_count[1]+thisPoint)*(bins+5)+2+bins] = Float32(pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y])
+            out[(shared_count[1]+thisPoint)*(bins+5)+3+bins] = Float32(pointXY[5+threadIdx().y+(blockIdx().x-1)*blockDim().y])
+            out[(shared_count[1]+thisPoint)*(bins+5)+4+bins] = Float32(pointXY[6+threadIdx().y+(blockIdx().x-1)*blockDim().y])
+            out[(shared_count[1]+thisPoint)*(bins+5)+5+bins] = Float32(coeff_of_variation)
+            # out[(shared_count[1]+thisPoint)*(bins+5)+3] = Float32(blockIdx().x*1000+threadIdx().y)
+            # out[(shared_count[1]+thisPoint)*(bins+5)+4] = Float32(coeff_of_variation)
+
+            # out[(shared_count[1]+thisPoint)*(bins+5)+1] = 7.6
+            # out[(shared_count[1]+thisPoint)*(bins+5)+2] = 7.6
+            # out[(shared_count[1]+thisPoint)*(bins+5)+3] = 7.6
+            # out[(shared_count[1]+thisPoint)*(bins+5)+4] = 7.6
         end
     end
+
     return
 end
 
