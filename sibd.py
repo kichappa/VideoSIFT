@@ -1,9 +1,10 @@
 import math, time, cv2, numpy as np
 from scipy.ndimage import maximum_filter, minimum_filter
 
-suffix = "_small"
+suffix = "_video"
 # read image as rgb
-img = cv2.imread(f"assets/blobs{suffix}.png", cv2.IMREAD_COLOR)
+# img = cv2.imread(f"assets/blobs{suffix}.png", cv2.IMREAD_COLOR)
+img = cv2.imread(f"assets/images/20241203_000635.mp4_frame_1.png", cv2.IMREAD_COLOR)
 
 scales = 5
 octaves = 3
@@ -67,17 +68,17 @@ def peak_detection_scipy(
     output_b = np.where(peak_mask_b, -dog2_b, output_b)
 
     # print out outputs for (40, 63) reds, in the size x size x 3 neighbourhood
-    try:
-        I, J = (78, 109)
-        if print_output:
-            for i in range(-size // 2, size // 2 + 1):
-                for j in range(-size // 2, size // 2 + 1):
-                    print(f"({I+i}, {J+j}): {DoG_stack_b[I+i, J+j]}")
-            for i in range(-size // 2, size // 2 + 1):
-                for j in range(-size // 2, size // 2 + 1):
-                    print(f"({I+i}, {J+j}): {output_b[I+i, J+j]}")
-    except:
-        pass
+    # try:
+    #     I, J = (78, 109)
+    #     if print_output:
+    #         for i in range(-size // 2, size // 2 + 1):
+    #             for j in range(-size // 2, size // 2 + 1):
+    #                 print(f"({I+i}, {J+j}): {DoG_stack_b[I+i, J+j]}")
+    #         for i in range(-size // 2, size // 2 + 1):
+    #             for j in range(-size // 2, size // 2 + 1):
+    #                 print(f"({I+i}, {J+j}): {output_b[I+i, J+j]}")
+    # except:
+    #     pass
 
     contrast_mask_r = output_r >= contrast_threshold
     contrast_mask_g = output_g >= contrast_threshold
@@ -421,15 +422,15 @@ for octave in range(octaves):
                 10,
                 threshold=1.5
             )
-            print(
-                f"Octave {octave}, Scale {scale-1}: {keypoint}. Is blob? {isBlob}, CV: {cv:.3f}"
-            )
+            # print(
+            #     f"Octave {octave}, Scale {scale-1}: {keypoint}. Is blob? {isBlob}, CV: {cv:.3f}"
+            # )
             if isBlob:
                 filtered_peaks[octave][scale - 1].append(keypoint)
-        if filtered_peaks[octave][scale - 1] is not None:
-            print(f"Length: Octave {octave}, Scale {scale-1}: {len(filtered_peaks[octave][scale-3])} from {len(keypoints[octave][scale-3])}")
-        else:
-            print(f"Length: Octave {octave}, Scale {scale-1}: 0 from {len(keypoints[octave][scale-3])}")
+        # if filtered_peaks[octave][scale - 1] is not None:
+        #     print(f"Length: Octave {octave}, Scale {scale-1}: {len(filtered_peaks[octave][scale-3])} from {len(keypoints[octave][scale-3])}")
+        # else:
+        #     print(f"Length: Octave {octave}, Scale {scale-1}: 0 from {len(keypoints[octave][scale-3])}")
 
 # save filtered peaks image
 for octave in range(octaves):

@@ -445,7 +445,6 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
     warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
     laneNum = (threadIdx().x - 1) % 32 # 0-indexed
 
-    # shared_count = CuDynamicSharedArray(UInt64, 1+32*2)
     shared_count = CuDynamicSharedArray(UInt64, 1)
 
     if threadIdx().x == 1
@@ -456,7 +455,7 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
     warp_offset::UInt64 = 0
     # is_nonzero = false
     if threadNum <= h * w
-        is_nonzero = d1[threadNum] != 0
+        is_nonzero = d1[threadNum] >= 0.03
         sync_warp()
         mask = CUDA.vote_ballot_sync(0xffffffff, is_nonzero)
         warp_count::UInt64 = count_ones(mask)
@@ -477,7 +476,6 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
         thisY = (threadNum - 1) % h + 1
         thisX = ((threadNum - 1) ÷ h) % imgWidth + 1
         thisImg = ((threadNum - 1) ÷ h) ÷ imgWidth + 1
-        # i(#1),j(#0) ==> i + (j) * 3 # 1-indexed
         @inbounds xy[1+index*6] = thisX
         @inbounds xy[2+index*6] = thisY
         @inbounds xy[3+index*6] = thisImg
@@ -497,14 +495,16 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
              (blockIdx().x > counts[4]) +
              (blockIdx().x > counts[5])
 
-    threadNum = threadIdx().x + ((2 * radii[subset] + 1 + 2 * 1)) * (threadIdx().y - 1) # 1-indexed
-    data = CuDynamicSharedArray(Float32, (2 * radii[subset] + 1 + 2 * 1)^2)
-    orientation = CuDynamicSharedArray(Float32, bins, sizeof(Float32) * (2 * radii[subset] + 1 + 2 * 1)^2)
+    r::Int16 = radii[subset]
 
-    if threadNum == 1
-        for i in 1:bins
-            orientation[i] = 0.0
-        end
+    l_threadNum = threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1) # 1-indexed  <<<<<<<<< SHOULD I CHANGE THIS TO threadIdx().x + blockDim().x * (threadIdx().y - 1) ?????
+    # l_threadNum = threadIdx().x + blockDim().x * (threadIdx().y - 1) 
+    data = CuDynamicSharedArray(Float32, (2 * r + 1 + 2 * 1)^2)
+    # data = CuDynamicSharedArray(Float32, (2 * r + 1 + 2 * 1), (2 * r + 1 + 2 * 1))
+    orientation = CuDynamicSharedArray(Float32, bins, sizeof(Float32) * (2 * r + 1 + 2 * 1)^2)
+
+    if l_threadNum <= bins
+        orientation[l_threadNum] = 0.0
     end
     o, h, w = let
         octave = cld(subset, 2)
@@ -516,51 +516,52 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
             o3, Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))
         end
     end
-    # h = h / 2^(octave - 1)
-    # w = w / 2^(octave - 1)
 
+    X = pointsXY[4+(blockIdx().x-1)*6] # 1-indexed
+    Y = pointsXY[2+(blockIdx().x-1)*6] # 1-indexed
 
-    X = pointsXY[4+blockIdx().x*6]
-    Y = pointsXY[2+blockIdx().x*6]
-
-    x = X + (threadIdx().y - radii[subset] - 1) # 1-indexed
-    y = Y + (threadIdx().x - radii[subset] - 1) # 1-indexed
+    x = X + threadIdx().y - r - 2 # 1-indexed
+    y = Y + threadIdx().x - r - 2 # 1-indexed
     sync_threads()
-
-    # if (threadIdx().x == 6 && threadIdx().y==6) && (blockIdx().x == 1 || blockIdx().x == counts[1] + 1 || blockIdx().x == counts[2] + 1 || blockIdx().x == counts[3] + 1 || blockIdx().x == counts[4] + 1 || blockIdx().x == counts[5] + 1)
-    #     @cuprintln("subset: $subset, h: $h, w: $w, bins: $bins, radius: $(radii[subset])\t , X: $X, Y: $Y, x: $x, y: $y")
-    # end
 
     # load elements around XY from the octave
     let
-        thisPX = y + (x - 1) * h
-        if 0 < thisPX <= h * w && threadNum <= (2 * radii[subset] + 1 + 2 * 1)^2
-            # if threadIdx().x == 5 && threadIdx().y == 5 && blockIdx().x == counts[6]
-            #     @cuprintln("thisPX: $thisPX, oSize: $(size(o)) h: $h, w: $w, x: $x, y: $y, threadNum: $threadNum, subset: $subset")
+        # thisPX = y + (x - 1) * h # 1-indexed
+        if 0 < x <= w && 0 < y <= h && threadIdx().x <= 2 * radii[subset] + 1 + 2 && threadIdx().y <= 2 * radii[subset] + 1 + 2
+            # data[threadIdx().y, threadIdx().x] = o[y, x]
+            data[l_threadNum] = o[y, x]
+            # if X == 111 && Y == 625
+            #     @cuprintln("x: $x, y: $y, th($(threadIdx().x), $(threadIdx().y)), l_threadNum: $l_threadNum, data[$l_threadNum]: $(data[l_threadNum]*255) o[$y, $x]=$(o[y, x]*255)")
             # end
-            data[threadNum] = o[thisPX]
         end
     end
     sync_threads()
 
     let
-        if 1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1
-            # if threadIdx().x == 9 && threadIdx().y == 9 && blockIdx().x == 30
-            #     @cuprintln("oSize: $(size(o)) h: $h, w: $w, x: $x, y: $y, threadNum: $threadNum, subset: $subset, radius: $(radii[subset]), threadIdx XY: $(threadIdx().x), $(threadIdx().y), dataSize: $((2 * radii[subset] + 1 + 2 * 1)^2)")
-            # end
-            dy = data[threadNum+1] - data[threadNum-1]
-            dx = data[threadNum+(2*radii[subset]+1+2)] - data[threadNum-(2*radii[subset]+1+2)]
-            weight = 1 / (sqrt(2 * pi) * radii[subset]) * exp(-((threadIdx().x - radii[subset] - 1)^2 + (threadIdx().y - radii[subset] - 1)^2) / (2 * radii[subset]^2))
+        if (1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1)# || (-2 < (X - 1231) < 2 && -2 < (Y - 82) < 2)
+            dy = data[l_threadNum-1] - data[l_threadNum+1]
+            dx = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
+            weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r*1.7)^2)) / (2 * pi * (r*1.7))
             magnitude = sqrt(dy^2 + dx^2) / 4
-            # bin::Int32 = fld(atan(dy, dx), 2 * pi / bins) + 1
-            bin::Int32 = fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1
-            val::Float32 = weight * magnitude # * atan(dy, dx)
-            CUDA.atomic_add!(pointer(orientation, bin), val)
-            # @inbounds out[bin+blockIdx().x*bins] = val
+            bin::Int32 = fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 # 1-indexed
+            # if l_threadNum == 1
+            # end
+            # if l_threadNum==35 &&X == 111 && Y == 625
+            #     for i in 1:((2 * r + 1 + 2 * 1)^2)
+            #         @cuprintln("data[$i]: $(data[i]*255)") 
+            #     end
+            # end
+            if X == 111 && Y == 625 && (data[l_threadNum-1] != o1[y-1, x] || data[l_threadNum+1] != o1[y+1, x] || data[l_threadNum+(2*r+1+2)] != o1[y, x+1] || data[l_threadNum-(2*r+1+2)] != o1[y, x-1])
+                # @cuprintln("($(1 < x < w) && $(1 < y < h) && $(1 < threadIdx().x <= 2 * radii[subset] + 1 + 1) && $(1 < threadIdx().y <= 2 * radii[subset] + 1 + 1))")
+                @cuprintln("x: $x, y: $y, dx: $dx = $(data[l_threadNum+(2*r+1+2)]*255) - d[$(l_threadNum-(2*r+1+2))]$(data[l_threadNum-(2*r+1+2)]*255) ($(o1[y, x+1]*255)-$(o1[y, x-1]*255)),\t th($(threadIdx().x), $(threadIdx().y)), l_threadNum: $l_threadNum, ($(threadIdx().x), $(threadIdx().y-1))=>$(threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1-1))vs$(l_threadNum-(2*r+3)), 2r+3=$(2*r+3)")
+            end
+            # CUDA.atomic_add!(pointer(orientation, bin), weight * magnitude)
+            CUDA.@atomic orientation[bin] += weight * magnitude
         end
     end
-    if threadNum <= bins
-        @inbounds out[threadNum+(blockIdx().x-1)*bins] = orientation[threadNum]
+    sync_threads()
+    if l_threadNum <= bins
+        @inbounds out[l_threadNum+(blockIdx().x-1)*bins] = orientation[l_threadNum]
     end
     return
 end
@@ -571,7 +572,6 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
     l_threadNum = threadIdx().x + blockDim().x * (threadIdx().y - 1) # 1-indexed
     threadNum = l_threadNum + blockDim().x * (blockIdx().x - 1) # 1-indexed
 
-    # shared_count = CuDynamicSharedArray(UInt64, 1+32*2)
     shared_count = CuDynamicSharedArray(UInt64, 1)
     shared_orientations = CuDynamicSharedArray(Float32, (blockDim().x, blockDim().y), sizeof(UInt64))
 
@@ -581,17 +581,8 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
     shared_orientations[threadIdx().x, threadIdx().y] = 0.0
     sync_threads()
     if threadIdx().x <= bins && threadIdx().y + (blockIdx().x - 1) * blockDim().y <= count
-        # if threadIdx().x == 1 && threadIdx().y == 29 && blockIdx().x == 298
-        # if blockIdx().x % 100 == 0 && threadIdx().y % 8 == 0 && threadIdx().x == 1
-        #     @cuprintln("threadNum: $threadNum, blockNum: $(blockIdx().x) warpNum: $(threadIdx().y), laneNum: $(threadIdx().x), pointXY[:, $(threadIdx().y + (blockIdx().x - 1) *blockDim().y)], XY[:,$(size(pointXY, 2))], shared_o[$l_threadNum]=>o[$(l_threadNum+((blockIdx().x - 1) *blockDim().y)*bins) = ($(threadIdx().x), $(((blockIdx().x - 1) *blockDim().y) + threadIdx().y))], [$(threadIdx().x), $(threadIdx().y)], size(shared_orientations): $(size(shared_orientations)), size(orientations): $(size(orientations))")
-        #     @cuprintln("orientations[$(l_threadNum+((blockIdx().x - 1) *blockDim().y)*bins)]: $(orientations[l_threadNum+((blockIdx().x - 1) *blockDim().y)*bins])")
-        #     @cuprintln("orientations[1, $(((blockIdx().x-1)*blockDim().y + threadIdx().y))]= $(orientations[7, 1])")
-        # end
         # shared_orientations[threadIdx().x, threadIdx().y] = orientations[l_threadNum+((blockIdx().x-1)*blockDim().y)*bins]
         shared_orientations[threadIdx().x, threadIdx().y] = orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y+threadIdx().y]
-        # if blockIdx().x == 1 && threadIdx().y == 1
-        #     @cuprintln("orientations[$(threadIdx().x), $(((blockIdx().x-1)*blockDim().y + threadIdx().y))]= $(orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y + threadIdx().y]) shared_orientations[$(threadIdx().x), $(threadIdx().y)]: $(shared_orientations[threadIdx().x, threadIdx().y])")
-        # end
     end
     sync_threads()
 
@@ -646,30 +637,43 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
     if coeff_of_variation < threshold
         if threadIdx().x <= bins
             out[(shared_count[1]+thisPoint)*(bins+5)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
-            if pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y] == 522 && pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y] == 145
+            if pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 522 && pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 145
                 @cuprintln("orientation[$(threadIdx().x)]: $(shared_orientations[threadIdx().x, threadIdx().y])")# (from $(orientation[threadIdx().x+((blockIdx().x-1)*blockDim().y+threadIdx().y-1)*bins]))")
             end
-            # if ((shared_count[1]+thisPoint) > size(out, 2))
-            #     @cuprintln("block_offset: $(shared_count[1]), thisPoint: $thisPoint, size(out): $(size(out)), threadIdx: [$(threadIdx().x), $(threadIdx().y)]")
-            # end
-            # out[(shared_count[1]+thisPoint)*(bins+5) + threadIdx().x] = 56.9
         end
         if threadIdx().x == 1
-            out[(shared_count[1]+thisPoint)*(bins+5)+1+bins] = Float32(pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            out[(shared_count[1]+thisPoint)*(bins+5)+2+bins] = Float32(pointXY[4+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            out[(shared_count[1]+thisPoint)*(bins+5)+3+bins] = Float32(pointXY[5+threadIdx().y+(blockIdx().x-1)*blockDim().y])
-            out[(shared_count[1]+thisPoint)*(bins+5)+4+bins] = Float32(pointXY[6+threadIdx().y+(blockIdx().x-1)*blockDim().y])
+            # @cuprintln("Th($(threadIdx().x), $(threadIdx().y)), blockIdx: ($(blockIdx().x), $(blockIdx().y), blockDim: ($(blockDim().x), $(blockDim().y)), coeff_of_variation: $coeff_of_variation, ($(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]), $(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]))from start:$(threadIdx().y+(blockIdx().x-1)*blockDim().y)")
+            out[(shared_count[1]+thisPoint)*(bins+5)+1+bins] = Float32(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
+            out[(shared_count[1]+thisPoint)*(bins+5)+2+bins] = Float32(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
+            out[(shared_count[1]+thisPoint)*(bins+5)+3+bins] = Float32(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
+            out[(shared_count[1]+thisPoint)*(bins+5)+4+bins] = Float32(pointXY[6+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
             out[(shared_count[1]+thisPoint)*(bins+5)+5+bins] = Float32(coeff_of_variation)
-            # out[(shared_count[1]+thisPoint)*(bins+5)+3] = Float32(blockIdx().x*1000+threadIdx().y)
-            # out[(shared_count[1]+thisPoint)*(bins+5)+4] = Float32(coeff_of_variation)
-
-            # out[(shared_count[1]+thisPoint)*(bins+5)+1] = 7.6
-            # out[(shared_count[1]+thisPoint)*(bins+5)+2] = 7.6
-            # out[(shared_count[1]+thisPoint)*(bins+5)+3] = 7.6
-            # out[(shared_count[1]+thisPoint)*(bins+5)+4] = 7.6
         end
     end
 
     return
 end
 
+function plot_blobs_f(points, img, h, w, stride, pType=1)
+    # stride = size(points, 1)
+    X = points[(blockIdx().x-1)*stride+32+1]
+    Y = points[(blockIdx().x-1)*stride+32+2]
+    o = points[(blockIdx().x-1)*stride+32+3]
+    if 0 < X <= w && 0 < Y <= h
+        # img[Integer(o + (Y - 1 + X - 1 * h) * 3)] = 1.0
+        img[Integer(o), Integer(Y), Integer(X)] = 1.0
+    end
+    return
+end
+
+function plot_blobs_uf(points, img, h, w, stride, pType=0)
+    # stride = size(points, 1)
+    o = points[(blockIdx().x-1)*stride+5]
+    X = points[(blockIdx().x-1)*stride+1]*2^(o-1)
+    Y = points[(blockIdx().x-1)*stride+2]*2^(o-1)
+    if 0 < X <= w && 0 < Y <= h
+        img[Integer(o + (Y - 1 + (X - 1) * h) * 3)] = 1.0
+        # img[Integer(o), Integer(Y), Integer(X)] = 1.0
+    end
+    return
+end
