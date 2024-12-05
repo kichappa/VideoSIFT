@@ -252,13 +252,11 @@ end
     return val * (max(a, max(b, c)) <= val)
 end
 
-
 @inline function min3(a, b, c, val)
     return val * (min(a, min(b, c)) >= val)
 end
 
-
-function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)
+function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, DoG2, DoG1)
     blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
     threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
     threads = blockDim().x * blockDim().y
@@ -353,6 +351,7 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)
             thisO = min3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
         end
         @inbounds out1[thisPX] = abs(thisO)
+        @inbounds DoG1[thisPX] = data[threads+threadNum]
     end
 
     shouldIProcess = (ap5 <= thisY < h - ap5 && ap5 <= thisX % imgWidth < imgWidth - ap5)
@@ -372,7 +371,7 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)
         # out2
         # Unrolled loop for x = -1, 0, 1 and y = -1, 0, 1
         # data 2
-        thisO = max3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threadNum])
+        thisO = max3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threads*2+threadNum])
         thisO = max3(data[threads+threadNum-1], data[threads+threadNum], data[threads+threadNum+1], thisO)
         thisO = max3(data[threads+threadNum-1+blockDim().x], data[threads+threadNum+blockDim().x], data[threads+threadNum+1+blockDim().x], thisO)
 
@@ -386,9 +385,9 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)
         thisO = max3(data[threadNum-1], data[threadNum], data[threadNum+1], thisO)
         thisO = max3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
 
-        if thisO != data[threadNum]
+        if thisO != data[threads*2+threadNum]
             # data 2
-            thisO = min3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threadNum])
+            thisO = min3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threads*2+threadNum])
             thisO = min3(data[threads+threadNum-1], data[threads+threadNum], data[threads+threadNum+1], thisO)
             thisO = min3(data[threads+threadNum-1+blockDim().x], data[threads+threadNum+blockDim().x], data[threads+threadNum+1+blockDim().x], thisO)
 
@@ -403,6 +402,7 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)
             thisO = min3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
         end
         @inbounds out2[thisPX] = abs(thisO)
+        @inbounds DoG2[thisPX] = data[threads*2+threadNum]
     end
     return
 end
@@ -455,7 +455,7 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
     warp_offset::UInt64 = 0
     # is_nonzero = false
     if threadNum <= h * w
-        is_nonzero = d1[threadNum] >= 0.03
+        is_nonzero = d1[threadNum] != 0
         sync_warp()
         mask = CUDA.vote_ballot_sync(0xffffffff, is_nonzero)
         warp_count::UInt64 = count_ones(mask)
@@ -541,7 +541,7 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
         if (1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1)# || (-2 < (X - 1231) < 2 && -2 < (Y - 82) < 2)
             dy = data[l_threadNum-1] - data[l_threadNum+1]
             dx = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
-            weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r*1.7)^2)) / (2 * pi * (r*1.7))
+            weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r*1)^2)) / (2 * pi * (r*1))
             magnitude = sqrt(dy^2 + dx^2) / 4
             bin::Int32 = fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 # 1-indexed
             # if l_threadNum == 1
@@ -636,18 +636,19 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
     end
     if coeff_of_variation < threshold
         if threadIdx().x <= bins
-            out[(shared_count[1]+thisPoint)*(bins+5)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
+            out[(shared_count[1]+thisPoint)*(bins+6)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
             if pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 522 && pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 145
                 @cuprintln("orientation[$(threadIdx().x)]: $(shared_orientations[threadIdx().x, threadIdx().y])")# (from $(orientation[threadIdx().x+((blockIdx().x-1)*blockDim().y+threadIdx().y-1)*bins]))")
             end
         end
         if threadIdx().x == 1
             # @cuprintln("Th($(threadIdx().x), $(threadIdx().y)), blockIdx: ($(blockIdx().x), $(blockIdx().y), blockDim: ($(blockDim().x), $(blockDim().y)), coeff_of_variation: $coeff_of_variation, ($(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]), $(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]))from start:$(threadIdx().y+(blockIdx().x-1)*blockDim().y)")
-            out[(shared_count[1]+thisPoint)*(bins+5)+1+bins] = Float32(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-            out[(shared_count[1]+thisPoint)*(bins+5)+2+bins] = Float32(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-            out[(shared_count[1]+thisPoint)*(bins+5)+3+bins] = Float32(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
-            out[(shared_count[1]+thisPoint)*(bins+5)+4+bins] = Float32(pointXY[6+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
-            out[(shared_count[1]+thisPoint)*(bins+5)+5+bins] = Float32(coeff_of_variation)
+            out[(shared_count[1]+thisPoint)*(bins+6)+1+bins] = Float32(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
+            out[(shared_count[1]+thisPoint)*(bins+6)+2+bins] = Float32(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
+            out[(shared_count[1]+thisPoint)*(bins+6)+3+bins] = Float32(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
+            out[(shared_count[1]+thisPoint)*(bins+6)+4+bins] = Float32(pointXY[6+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
+            out[(shared_count[1]+thisPoint)*(bins+6)+5+bins] = Float32(pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
+            out[(shared_count[1]+thisPoint)*(bins+6)+6+bins] = Float32(coeff_of_variation)
         end
     end
 
@@ -656,7 +657,7 @@ end
 
 function plot_blobs_f(points, img, h, w, stride, pType=1)
     # stride = size(points, 1)
-    X = points[(blockIdx().x-1)*stride+32+1]
+    X = points[(blockIdx().x-1)*stride+32+5]
     Y = points[(blockIdx().x-1)*stride+32+2]
     o = points[(blockIdx().x-1)*stride+32+3]
     if 0 < X <= w && 0 < Y <= h
@@ -669,7 +670,7 @@ end
 function plot_blobs_uf(points, img, h, w, stride, pType=0)
     # stride = size(points, 1)
     o = points[(blockIdx().x-1)*stride+5]
-    X = points[(blockIdx().x-1)*stride+1]*2^(o-1)
+    X = points[(blockIdx().x-1)*stride+4]*2^(o-1)
     Y = points[(blockIdx().x-1)*stride+2]*2^(o-1)
     if 0 < X <= w && 0 < Y <= h
         img[Integer(o + (Y - 1 + (X - 1) * h) * 3)] = 1.0

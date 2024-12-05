@@ -64,6 +64,7 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1
 	conv_gpu = []
 	out_gpu = []
 	DoG_gpu = []
+	DoGo_gpu = []
 	XY_gpu = nothing
 	for octave in 1:octaves
 		prev_mid_size = [height, width]
@@ -72,6 +73,7 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1
 			if layer == 1
 				push!(out_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				push!(DoG_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
+				push!(DoGo_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				if octave == 1
 					XY_gpu = CUDA.zeros(Int32, 6, ceil(Integer, 0.0028 * height * width))
 				end
@@ -79,6 +81,7 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1
 				push!(out_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 				if layer < layers
 					push!(DoG_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
+					push!(DoGo_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 				end
 			end
 			# create the convolution kernel
@@ -89,10 +92,10 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1
 			end
 		end
 	end
-	return CuArray(img), out_gpu, DoG_gpu, conv_gpu, CUDA.zeros(Float32, height, width), XY_gpu
+	return CuArray(img), out_gpu, DoG_gpu, conv_gpu, CUDA.zeros(Float32, height, width), XY_gpu, DoGo_gpu
 end
 
-function findBlobs(img_gpu, out_gpu, DoG_gpu, conv_gpu, buffer, height, width, imgWidth, octaves, scales = 5, sigma0 = 1.6, k = -1)
+function findBlobs(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, height, width, imgWidth, octaves, scales = 5, sigma0 = 1.6, k = -1)
 	if k == -1
 		k = 2^(1 / (scales - 3))
 	end
@@ -212,6 +215,8 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, conv_gpu, buffer, height, width, i
 						accumulative_apron,
 						accumulative_apron + apron,
 						k - 1,
+						DoGo_gpu[octave][2],
+						DoGo_gpu[octave][1]
 					)
 					CUDA.synchronize()
 				end
@@ -256,7 +261,7 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
 			CUDA.synchronize()
 			push!(counts, Integer(collect(count_gpu)[1]))
             sigma = sigma0 * k^((octave - 1) * 2 + layer)
-			push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer)+4))
+			push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer)))
             println("O$(octave)L$(layer) radius: $(radii[end]), sigma: 1.6*rt2^$((octave-1)*2+layer), hyp_radius: $(ceil(Int, 1.5 * sigma0 * k^(layer)+4))")
 		end
 		height_local = height_local ÷ 2
@@ -289,7 +294,7 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
 	CUDA.synchronize()
 	# save orientation_gpu as csv
 	CSV.write("assets/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
-	filtered_XY_gpu = CUDA.zeros(Float32, bins + 5, count)
+	filtered_XY_gpu = CUDA.zeros(Float32, bins + 6, count)
 	filtered_count_gpu = CuArray{UInt64}([0])
 	# println("Size of XY_gpu: $(size(XY_gpu)), size of filtered_XY_gpu: $(size(filtered_XY_gpu))")
 	# println("Launching filter_blobs with threads: $((32, 512 ÷ 32)), blocks: $(cld(count, 512 ÷ 32))")
@@ -311,7 +316,7 @@ end
 
 let
 	println("Here we go!")
-	nImages = 1
+	nImages = 4
 	img = []
 	imgWidth = 0
 	time_taken = 0
@@ -336,9 +341,9 @@ let
 	sigma0 = 1.6
 	k = 2^(1 / (layers - 3))
 
-	img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, XY_gpu = getGPUElements(img, height, width, layers, octaves, nImages, sigma0, k)
+	img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, XY_gpu, DoGo_gpu = getGPUElements(img, height, width, layers, octaves, nImages, sigma0, k)
 	println("Got the GPU elements...")
-	iterations = 1
+	iterations = 4
 	count = nothing
 	orientations = nothing
 	blobs = nothing
@@ -348,7 +353,7 @@ let
 				out_gpu[o][l] .= 0
 			end
 		end
-		time_taken += findBlobs(img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
+		time_taken += findBlobs(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
 		# keep bins < 32 so that one warp handles one point
 		time_taken_here, count, orientations, blobs = extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth)
 		time_taken += time_taken_here
@@ -358,9 +363,16 @@ let
 		for i in 1:2
 			max = CUDA.maximum(DoG_gpu[j][i])
 			if max .!= 0
-				DoG_gpu = DoG_gpu ./ max
+				DoG_gpu[j][i] = DoG_gpu[j][i] ./ max
 			end
 			save("assets/DoG_nov24_o$(j)l$(i).png", colorview(Gray, Array(DoG_gpu[j][i])))
+			
+			max = CUDA.maximum(DoGo_gpu[j][i])
+			min = CUDA.minimum(DoGo_gpu[j][i])
+			if max-min .!= 0
+                DoGo_gpu[j][i] = (DoGo_gpu[j][i] .- min) ./ (max - min)
+			end
+			save("assets/DoG_raw_nov24_o$(j)l$(i).png", colorview(Gray, Array(DoGo_gpu[j][i])))
 		end
 	end
 	println("count: $count, size of XY_gpu: $(size(XY_gpu))")
@@ -375,7 +387,7 @@ let
 	CSV.write("assets/filtered_blobs.csv", df,
 		transform = (col, val) -> typeof(val) <: AbstractFloat ? cfmt(fmt, val) : val)
 
-	println("Time taken: $(round(time_taken / (iterations * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time. Total time taken: $(round(time_taken/iterations, digits=5))s")
+	println("Time taken: $(round(time_taken / (iterations * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time. Total time taken: $(round(time_taken/iterations, digits=5))s per iteration.")
 end
 
 
