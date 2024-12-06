@@ -256,29 +256,21 @@ end
     return val * (min(a, min(b, c)) >= val)
 end
 
-function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, DoG2, DoG1)
-    blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, DoG4, DoG3, DoG2, DoG1)
     threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
     threads = blockDim().x * blockDim().y
 
-    data = CuDynamicSharedArray(Float32, threads * 3)
-    # data1 = CuDynamicSharedArray(Float32, threads)
-    # data2 = CuDynamicSharedArray(Float32, threads, sizeof(Float32)*threads)
-    # data3 = CuDynamicSharedArray(Float32, threads, 2*sizeof(Float32)*threads)
+    data1 = CuDynamicSharedArray(Float32, threads)
+    data2 = CuDynamicSharedArray(Float32, threads, sizeof(Float32) * threads)
+    data3 = CuDynamicSharedArray(Float32, threads, 2 * sizeof(Float32) * threads)
 
     # ground truth
     # this thread has same x and y throughout the kernel. Blocklocal numbering is img - ap4 (top, bottom and verticals)
     # when I process extrema in [data1, data2, data3], I need to check if the thread is outside the ap4 + 1 in all directions
     # when I process extrema in [data2, data3, data4], I need to check if the thread is outside the ap5 + 1 in all directions
 
-
-    # blocksInACol::Int32 = cld(h - 2 * (ap4 + 1), blockDim().x - 2)
-    # blocksInAnImage::Int32 = blocksInACol * cld(imgWidth - 2 * (ap4 + 1), blockDim().y - 2)
-    # thisY::Int32 = ap4 + (blockNum % blocksInACol) * (blockDim().x - 2) + threadIdx().x - 1 # 0-indexed
-    # thisX::Int32 = ap4 + (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y - 1 # 0-indexed
-    # thisPX::Int32 = thisY + thisX * h + 1 # 1-indexed
-
     thisY::Int32, thisX::Int32, thisPX::Int32 = let
+        blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
         blocksInACol::Int32 = cld(h - 2 * (ap4 + 1), blockDim().x - 2)
         blocksInAnImage::Int32 = blocksInACol * cld(imgWidth - 2 * (ap4 + 1), blockDim().y - 2)
 
@@ -286,84 +278,76 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, D
         ap4 + (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y - 1, # 0-indexed
         ap4 + (blockNum % blocksInACol) * (blockDim().x - 2) + threadIdx().x - 1 + (ap4 + (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y - 1) * h + 1 # 1-indexed
     end
-
-
+    
     let
         shouldIProcess = (thisY < h - ap4 && thisX % imgWidth < imgWidth - ap4)
-
         if (0 < thisPX <= h * w)
-            # data[threadNum] = shouldIProcess * (l2[thisPX] - l1[thisPX]) / norm
-            # data[blockDim().x * blockDim().y +threadNum] = shouldIProcess * (l3[thisPX] - l2[thisPX]) / norm
-            # data[threads*2+threadNum] = shouldIProcess * (l4[thisPX] - l3[thisPX]) / norm
-
-            data[threadNum] = @inbounds l1[thisPX]
+            # data1[threadNum] = shouldIProcess * (l2[thisPX] - l1[thisPX]) / norm
+            # data2[threadNum] = shouldIProcess * (l3[thisPX] - l2[thisPX]) / norm
+            # data3[threadNum] = shouldIProcess * (l4[thisPX] - l3[thisPX]) / norm
+            data1[threadNum] = @inbounds l1[thisY, thisX]
             # sync_threads()
             sync_warp()
-            data[threadNum+threads] = @inbounds l2[thisPX]
-            data[threadNum] = shouldIProcess * (@inbounds l2[thisPX] - data[threadNum]) / norm
+            data2[threadNum] = @inbounds l2[thisY, thisX]
+            data1[threadNum] = shouldIProcess * (@inbounds data2[threadNum] - data1[threadNum]) / norm
             # sync_threads()
             sync_warp()
-            data[threadNum+threads*2] = @inbounds l3[thisPX]
-            data[threadNum+threads] = shouldIProcess * (@inbounds l3[thisPX] - data[threadNum+threads]) / norm
+            data3[threadNum] = @inbounds l3[thisY, thisX]
+            data2[threadNum] = shouldIProcess * (@inbounds data3[threadNum] - data2[threadNum]) / norm
             # sync_threads()
             sync_warp()
-            data[threadNum+threads*2] = shouldIProcess * (@inbounds l4[thisPX] - data[threadNum+threads*2]) / norm
+            data3[threadNum] = shouldIProcess * (@inbounds l4[thisY, thisX] - data3[threadNum]) / norm
         end
-        sync_threads()
     end
+    sync_threads()
 
     if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h - ap4 && thisX % imgWidth < imgWidth - ap4)
-        # 	# out1
-        # 	# Unrolled loop for x = -1, 0, 1 and y = -1, 0, 1
-        # if (thisPX > h * w)
-        #     @cuprintln("ThreadNum: $threadNum, blockNum: $blockNum, thisX: $thisX, thisY: $thisY, h: $h, w: $w, (thisX mod imgWidth): $(thisX % imgWidth), imgWidth-ap4: $(imgWidth - ap4), blocksInAnImage: $blocksInAnImage, blocksInACol: $blocksInACol")
-        # end
-        thisO = 0.0
         # data 2
-        thisO = max3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threads+threadNum])
-        thisO = max3(data[threads+threadNum-1], data[threads+threadNum], data[threads+threadNum+1], thisO)
-        thisO = max3(data[threads+threadNum-1+blockDim().x], data[threads+threadNum+blockDim().x], data[threads+threadNum+1+blockDim().x], thisO)
+        thisO = max3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data2[threadNum])
+        thisO = max3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+        thisO = max3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
 
         # data 3
-        thisO = max3(data[threads*2+threadNum-1-blockDim().x], data[threads*2+threadNum-blockDim().x], data[threads*2+threadNum+1-blockDim().x], thisO)
-        thisO = max3(data[threads*2+threadNum-1], data[threads*2+threadNum], data[threads*2+threadNum+1], thisO)
-        thisO = max3(data[threads*2+threadNum-1+blockDim().x], data[threads*2+threadNum+blockDim().x], data[threads*2+threadNum+1+blockDim().x], thisO)
+        thisO = max3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+        thisO = max3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+        thisO = max3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
 
         # data 1
-        thisO = max3(data[threadNum-1-blockDim().x], data[threadNum-blockDim().x], data[threadNum+1-blockDim().x], thisO)
-        thisO = max3(data[threadNum-1], data[threadNum], data[threadNum+1], thisO)
-        thisO = max3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
+        thisO = max3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
+        thisO = max3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
+        thisO = max3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
 
-        if thisO != data[threads+threadNum]
+        if thisO != data2[threadNum]
             # data 2
-            thisO = min3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threads+threadNum])
-            thisO = min3(data[threads+threadNum-1], data[threads+threadNum], data[threads+threadNum+1], thisO)
-            thisO = min3(data[threads+threadNum-1+blockDim().x], data[threads+threadNum+blockDim().x], data[threads+threadNum+1+blockDim().x], thisO)
+            thisO = min3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data2[threadNum])
+            thisO = min3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+            thisO = min3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
 
             # data 3
-            thisO = min3(data[threads*2+threadNum-1-blockDim().x], data[threads*2+threadNum-blockDim().x], data[threads*2+threadNum+1-blockDim().x], thisO)
-            thisO = min3(data[threads*2+threadNum-1], data[threads*2+threadNum], data[threads*2+threadNum+1], thisO)
-            thisO = min3(data[threads*2+threadNum-1+blockDim().x], data[threads*2+threadNum+blockDim().x], data[threads*2+threadNum+1+blockDim().x], thisO)
+            thisO = min3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+            thisO = min3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+            thisO = min3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
 
             # data 1
-            thisO = min3(data[threadNum-1-blockDim().x], data[threadNum-blockDim().x], data[threadNum+1-blockDim().x], thisO)
-            thisO = min3(data[threadNum-1], data[threadNum], data[threadNum+1], thisO)
-            thisO = min3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
+            thisO = min3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
+            thisO = min3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
+            thisO = min3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
         end
-        @inbounds out1[thisPX] = abs(thisO)
-        @inbounds DoG1[thisPX] = data[threads+threadNum]
+        # @inbounds out1[thisPX] = abs(thisO)
+        @inbounds out1[thisY, thisX] = abs(thisO)
+        @inbounds DoG1[thisPX] = data1[threadNum]
+        @inbounds DoG2[thisPX] = data2[threadNum]
+        @inbounds DoG3[thisPX] = data3[threadNum]
     end
+    sync_threads()
 
     shouldIProcess = (ap5 <= thisY < h - ap5 && ap5 <= thisX % imgWidth < imgWidth - ap5)
     if (0 < thisPX <= h * w)
-        # data[threadNum] = shouldIProcess * (l2[thisPX] - l1[thisPX]) / norm
-        # data[blockDim().x * blockDim().y +threadNum] = shouldIProcess * (l3[thisPX] - l2[thisPX]) / norm
-        # data[threads*2+threadNum] = shouldIProcess * (l4[thisPX] - l3[thisPX]) / norm
-
-        data[threadNum] = @inbounds l4[thisPX]
+        # data1[threadNum] = shouldIProcess * (l4[thisPX] - l3[thisPX]) / norm
+        data1[threadNum] = @inbounds l4[thisY, thisX]
         sync_warp()
         # sync_threads()
-        data[threadNum] = shouldIProcess * (@inbounds l5[thisPX] - data[threadNum]) / norm
+        data1[threadNum] = shouldIProcess * (@inbounds l5[thisY, thisX] - data1[threadNum]) / norm
     end
     sync_threads()
 
@@ -371,38 +355,39 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, D
         # out2
         # Unrolled loop for x = -1, 0, 1 and y = -1, 0, 1
         # data 2
-        thisO = max3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threads*2+threadNum])
-        thisO = max3(data[threads+threadNum-1], data[threads+threadNum], data[threads+threadNum+1], thisO)
-        thisO = max3(data[threads+threadNum-1+blockDim().x], data[threads+threadNum+blockDim().x], data[threads+threadNum+1+blockDim().x], thisO)
+        thisO = max3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data3[threadNum])
+        thisO = max3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+        thisO = max3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
 
         # data 3
-        thisO = max3(data[threads*2+threadNum-1-blockDim().x], data[threads*2+threadNum-blockDim().x], data[threads*2+threadNum+1-blockDim().x], thisO)
-        thisO = max3(data[threads*2+threadNum-1], data[threads*2+threadNum], data[threads*2+threadNum+1], thisO)
-        thisO = max3(data[threads*2+threadNum-1+blockDim().x], data[threads*2+threadNum+blockDim().x], data[threads*2+threadNum+1+blockDim().x], thisO)
+        thisO = max3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+        thisO = max3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+        thisO = max3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
 
         # data 1
-        thisO = max3(data[threadNum-1-blockDim().x], data[threadNum-blockDim().x], data[threadNum+1-blockDim().x], thisO)
-        thisO = max3(data[threadNum-1], data[threadNum], data[threadNum+1], thisO)
-        thisO = max3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
+        thisO = max3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
+        thisO = max3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
+        thisO = max3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
 
-        if thisO != data[threads*2+threadNum]
+        if thisO != data3[threadNum]
             # data 2
-            thisO = min3(data[threads+threadNum-1-blockDim().x], data[threads+threadNum-blockDim().x], data[threads+threadNum+1-blockDim().x], data[threads*2+threadNum])
-            thisO = min3(data[threads+threadNum-1], data[threads+threadNum], data[threads+threadNum+1], thisO)
-            thisO = min3(data[threads+threadNum-1+blockDim().x], data[threads+threadNum+blockDim().x], data[threads+threadNum+1+blockDim().x], thisO)
+            thisO = min3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data3[threadNum])
+            thisO = min3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+            thisO = min3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
 
             # data 3
-            thisO = min3(data[threads*2+threadNum-1-blockDim().x], data[threads*2+threadNum-blockDim().x], data[threads*2+threadNum+1-blockDim().x], thisO)
-            thisO = min3(data[threads*2+threadNum-1], data[threads*2+threadNum], data[threads*2+threadNum+1], thisO)
-            thisO = min3(data[threads*2+threadNum-1+blockDim().x], data[threads*2+threadNum+blockDim().x], data[threads*2+threadNum+1+blockDim().x], thisO)
+            thisO = min3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+            thisO = min3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+            thisO = min3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
 
             # data 1
-            thisO = min3(data[threadNum-1-blockDim().x], data[threadNum-blockDim().x], data[threadNum+1-blockDim().x], thisO)
-            thisO = min3(data[threadNum-1], data[threadNum], data[threadNum+1], thisO)
-            thisO = min3(data[threadNum-1+blockDim().x], data[threadNum+blockDim().x], data[threadNum+1+blockDim().x], thisO)
+            thisO = min3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
+            thisO = min3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
+            thisO = min3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
         end
-        @inbounds out2[thisPX] = abs(thisO)
-        @inbounds DoG2[thisPX] = data[threads*2+threadNum]
+        # @inbounds out2[thisPX] = abs(thisO)
+        @inbounds out2[thisY, thisX] = abs(thisO)
+        @inbounds DoG4[thisPX] = data1[threadNum]
     end
     return
 end
@@ -455,7 +440,7 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
     warp_offset::UInt64 = 0
     # is_nonzero = false
     if threadNum <= h * w
-        is_nonzero = d1[threadNum] != 0
+        is_nonzero = d1[threadNum] >= 0.01
         sync_warp()
         mask = CUDA.vote_ballot_sync(0xffffffff, is_nonzero)
         warp_count::UInt64 = count_ones(mask)
@@ -522,7 +507,7 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
 
     x = X + threadIdx().y - r - 2 # 1-indexed
     y = Y + threadIdx().x - r - 2 # 1-indexed
-    sync_threads()
+    # sync_threads()
 
     # load elements around XY from the octave
     let
@@ -541,7 +526,7 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins)
         if (1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1)# || (-2 < (X - 1231) < 2 && -2 < (Y - 82) < 2)
             dy = data[l_threadNum-1] - data[l_threadNum+1]
             dx = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
-            weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r*1)^2)) / (2 * pi * (r*1))
+            weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r * 1)^2)) / (2 * pi * (r * 1))
             magnitude = sqrt(dy^2 + dx^2) / 4
             bin::Int32 = fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 # 1-indexed
             # if l_threadNum == 1
@@ -579,14 +564,12 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
         shared_count[1] = 0
     end
     shared_orientations[threadIdx().x, threadIdx().y] = 0.0
-    sync_threads()
     if threadIdx().x <= bins && threadIdx().y + (blockIdx().x - 1) * blockDim().y <= count
-        # shared_orientations[threadIdx().x, threadIdx().y] = orientations[l_threadNum+((blockIdx().x-1)*blockDim().y)*bins]
         shared_orientations[threadIdx().x, threadIdx().y] = orientations[threadIdx().x, (blockIdx().x-1)*blockDim().y+threadIdx().y]
     end
     sync_threads()
 
-    coeff_of_variation, prod = let
+    coeff_of_variation = let
         # for each warp, calculate sum of orientations
         local_mean = shared_orientations[threadIdx().x, threadIdx().y]
         sync_warp()
@@ -610,21 +593,18 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
         local_deviation = CUDA.shfl_sync(0xffffffff, local_deviation, 1)
         local_deviation = sqrt(local_deviation / bins)
         if local_mean == 0
-            # return INT MAX
-            typemax(Float32), local_mean
+            typemax(Float32)
         else
-            local_deviation / local_mean, local_mean
+            local_deviation / local_mean
         end
     end
 
-
+    sync_warp()
 
     thisPoint = 0
     if coeff_of_variation < threshold
         if threadIdx().x == 1
-            # CUDA.@atomic old = shared_count[1]
-            thisPoint = CUDA.atomic_add!(CUDA.pointer(shared_count, 1), UInt64(1))
-            # @cuprintln("COV: blockNum: $(blockIdx().x), threadIdx: [$(threadIdx().x), $(threadIdx().y)], thisPoint: ($thisPoint), coeff_of_variation: $coeff_of_variation")
+            thisPoint = CUDA.@atomic shared_count[1] += 1
         end
         thisPoint = CUDA.shfl_sync(0xffffffff, thisPoint, 1)
     end
@@ -632,8 +612,10 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
 
 
     if threadIdx().x == 1 && threadIdx().y == 1
-        shared_count[1] = CUDA.atomic_add!(pointer(outCount, 1), shared_count[1])
+        # shared_count[1] = CUDA.atomic_add!(pointer(outCount, 1), shared_count[1])
+        shared_count[1] = CUDA.@atomic outCount[1] += shared_count[1]
     end
+    sync_threads()
     if coeff_of_variation < threshold
         if threadIdx().x <= bins
             out[(shared_count[1]+thisPoint)*(bins+6)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
@@ -662,7 +644,10 @@ function plot_blobs_f(points, img, h, w, stride, pType=1)
     o = points[(blockIdx().x-1)*stride+32+3]
     if 0 < X <= w && 0 < Y <= h
         # img[Integer(o + (Y - 1 + X - 1 * h) * 3)] = 1.0
-        img[Integer(o), Integer(Y), Integer(X)] = 1.0
+        img[1, Integer(Y), Integer(X)] = 1.0
+        img[2, Integer(Y), Integer(X)] = 1.0
+        img[3, Integer(Y), Integer(X)] = 1.0
+        img[Integer(o), Integer(Y), Integer(X)] = 0.0
     end
     return
 end
@@ -670,10 +655,13 @@ end
 function plot_blobs_uf(points, img, h, w, stride, pType=0)
     # stride = size(points, 1)
     o = points[(blockIdx().x-1)*stride+5]
-    X = points[(blockIdx().x-1)*stride+4]*2^(o-1)
-    Y = points[(blockIdx().x-1)*stride+2]*2^(o-1)
+    X = points[(blockIdx().x-1)*stride+4] * 2^(o - 1)
+    Y = points[(blockIdx().x-1)*stride+2] * 2^(o - 1)
     if 0 < X <= w && 0 < Y <= h
-        img[Integer(o + (Y - 1 + (X - 1) * h) * 3)] = 1.0
+        img[Integer(1 + (Y - 1 + (X - 1) * h) * 3)] = 1.0
+        img[Integer(2 + (Y - 1 + (X - 1) * h) * 3)] = 1.0
+        img[Integer(3 + (Y - 1 + (X - 1) * h) * 3)] = 1.0
+        img[Integer(o + (Y - 1 + (X - 1) * h) * 3)] = 0.0
         # img[Integer(o), Integer(Y), Integer(X)] = 1.0
     end
     return
