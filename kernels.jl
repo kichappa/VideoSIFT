@@ -256,7 +256,7 @@ end
     return val * (min(a, min(b, c)) >= val)
 end
 
-function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, DoG4, DoG3, DoG2, DoG1)
+function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)#, DoG4, DoG3, DoG2, DoG1)
     threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
     threads = blockDim().x * blockDim().y
 
@@ -335,9 +335,9 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, D
         end
         # @inbounds out1[thisPX] = abs(thisO)
         @inbounds out1[thisY, thisX] = abs(thisO)
-        @inbounds DoG1[thisPX] = data1[threadNum]
-        @inbounds DoG2[thisPX] = data2[threadNum]
-        @inbounds DoG3[thisPX] = data3[threadNum]
+        # @inbounds DoG1[thisPX] = data1[threadNum]
+        # @inbounds DoG2[thisPX] = data2[threadNum]
+        # @inbounds DoG3[thisPX] = data3[threadNum]
     end
     sync_threads()
 
@@ -387,7 +387,7 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm, D
         end
         # @inbounds out2[thisPX] = abs(thisO)
         @inbounds out2[thisY, thisX] = abs(thisO)
-        @inbounds DoG4[thisPX] = data1[threadNum]
+        # @inbounds DoG4[thisPX] = data1[threadNum]
     end
     return
 end

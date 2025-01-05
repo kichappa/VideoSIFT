@@ -24,10 +24,10 @@ while True:
     if not ret:
         break
     
-    if len(images) > 0:
+    if len(images) > 128:
         # save the frame
         cv2.imwrite(f'assets/images/{video_name}_frame_{len(images)}.png', frame)
     
     
-    if len(images) == 0+128:
+    if len(images) == 128+128:
         break
