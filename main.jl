@@ -140,18 +140,27 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, height
                 if layer == 1
                     if octave == 1
                         # take the image as input, blur with conv_gpu[1]
-                        time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 64 col_kernel_strips_2(
+                        # time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 64 col_kernel_strips_2(
+                        #     img_gpu,
+                        #     conv_gpu[1],
+                        #     buffer,
+                        #     Int32(width),
+                        #     Int16(height),
+                        #     Int16(imgWidth),
+                        #     Int8(accumulative_apron),
+                        #     Int8(apron),
+                        # )                        
+                        time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 64 col_kernel_strips_3(
                             img_gpu,
                             conv_gpu[1],
                             buffer,
                             Int32(width),
                             Int16(height),
                             Int16(imgWidth),
-                            Int8(accumulative_apron),
                             Int8(apron),
                         )
                         CUDA.synchronize()
-                        # save("assets/gaussian_o$(octave)_l$(layer)_c.png", colorview(Gray, collect(buffer)))
+                        save("assets/gaussian_o$(octave)_l$(layer)_c.png", colorview(Gray, collect(buffer)))
                         time_taken += CUDA.@elapsed @cuda threads = threads_row blocks = blocks_row shmem = shmem_row maxregs = 32 row_kernel_2(
                             buffer,
                             conv_gpu[1],
@@ -173,18 +182,27 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, height
                     end
                 else
                     # take the previous layer's output as input
-                    time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 64 col_kernel_strips_2(
+                    # time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 64 col_kernel_strips_2(
+                    #     out_gpu[octave][layer-1],
+                    #     conv_gpu[layer-1],
+                    #     buffer,
+                    #     Int32(width),
+                    #     Int16(height),
+                    #     Int16(imgWidth / 2^(octave - 1)),
+                    #     Int8(accumulative_apron),
+                    #     Int8(apron),
+                    # )                    
+                    time_taken += CUDA.@elapsed @cuda threads = threads_column blocks = blocks_column shmem = shmem_column maxregs = 64 col_kernel_strips_3(
                         out_gpu[octave][layer-1],
                         conv_gpu[layer-1],
                         buffer,
                         Int32(width),
                         Int16(height),
                         Int16(imgWidth / 2^(octave - 1)),
-                        Int8(accumulative_apron),
                         Int8(apron),
                     )
                     CUDA.synchronize()
-                    # save("assets/gaussian_o$(octave)_l$(layer)_c.png", colorview(Gray, collect(buffer)))
+                    save("assets/gaussian_o$(octave)_l$(layer)_c.png", colorview(Gray, collect(buffer)))
                     time_taken += CUDA.@elapsed @cuda threads = threads_row blocks = blocks_row shmem = shmem_row maxregs = 32 row_kernel_2(
                         buffer,
                         conv_gpu[layer-1],
@@ -199,6 +217,9 @@ function findBlobs(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, height
                 CUDA.synchronize()
                 # save("assets/gaussian_o$(octave)_l$(layer)_rc.png", colorview(Gray, collect(out_gpu[octave][layer])))
                 save("assets/gaussian_o$(octave)_l$(layer).png", colorview(Gray, collect(out_gpu[octave][layer])))
+                if octave == 1 && layer == 1
+                    save("assets/go/gaussian_o$(octave)_l$(layer).png", colorview(Gray, Array(out_gpu[octave][layer])))
+                end
                 if layer == scales
                     threads_blobs = (32, 1024 ÷ 32)
                     blocks_blobs = (cld(height - 2 * (accumulative_apron + 1), threads_blobs[1] - 2), cld(width - 2 * (accumulative_apron + 1) * nImages, threads_blobs[2] - 2))
@@ -290,7 +311,7 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
                 println("O$(octave)L$(layer) count: $(counts[end])")
             end
             sigma = sigma0 * k^((octave - 1) * 2 + layer)
-            push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer)+1))
+            push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer) + 1))
             # println("O$(octave)L$(layer) radius: $(radii[end]), sigma: 1.6*rt2^$((octave-1)*2+layer), hyp_radius: $(ceil(Int, 1.5 * sigma0 * k^(layer)+4))")
         end
         height_local = height_local ÷ 2
@@ -308,6 +329,17 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
     # end
     orientation_gpu = CUDA.zeros(Float32, bins, count)
 
+    # lets store the gradient orientations at each pixel in a 2D array
+    gradient_orientations = []
+    aligned_go = []
+    for o in 1:octaves
+        push!(gradient_orientations, CUDA.zeros(Float32, 4, cld(height, 2^(o - 1)), cld(width, 2^(o - 1))))
+        push!(aligned_go, CUDA.zeros(Float32, 4, cld(height, 2^(o - 1)), cld(width, 2^(o - 1))))
+        # push!(gradient_orientations, CUDA.zeros(Float32, 3, height, width))
+    end
+
+    check_count = CUDA.zeros(UInt64, 1)
+
     time_taken += CUDA.@elapsed @cuda threads = threads blocks = count shmem = (sizeof(Float32) * (((maximum(radii) * 2 + 1) + 2 * 1)^2 + bins)) maxregs = 32 find_orientations(
         out_gpu[3][2],
         out_gpu[2][2],
@@ -319,10 +351,23 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
         counts_gpu,
         radii_gpu,
         bins,
+        gradient_orientations[3],
+        gradient_orientations[2],
+        gradient_orientations[1],
+        aligned_go[3],
+        aligned_go[2],
+        aligned_go[1],
+        check_count
     )
     CUDA.synchronize()
+    println("check_count: $(collect(check_count)[1])")
     # save orientation_gpu as csv
     CSV.write("assets/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
+    # save gradient_orientations as images
+    for o in 1:octaves
+        save("assets/go/gradient_orientations_o$(o).png", colorview(RGBA, Array(gradient_orientations[o])))
+        save("assets/go/aligned_go_o$(o).png", colorview(RGBA, map(clamp01nan, Array(aligned_go[o]))))
+    end
     filtered_XY_gpu = CUDA.zeros(Float32, bins + 6, count)
     filtered_count_gpu = CuArray{UInt64}([0])
     # println("Size of XY_gpu: $(size(XY_gpu)), size of filtered_XY_gpu: $(size(filtered_XY_gpu))")
@@ -332,30 +377,38 @@ function extractBlobXYs(out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width
     time_taken += CUDA.@elapsed @cuda threads = (32, 512 ÷ 32) blocks = cld(count, 512 ÷ 32) shmem = (sizeof(Float32) * 32 * 32 + sizeof(UInt64)) filter_blobs(
         XY_gpu, orientation_gpu, filtered_XY_gpu, count, filtered_count_gpu, bins, 0.6)
     CUDA.synchronize()
-    
+
     println("filtered count: $(collect(filtered_count_gpu)[1])")
-    blank_slate = CUDA.zeros(Float32, 3, height, width)
+    blank_slate = CUDA.zeros(Float32, 4, height, width)
     @cuda threads = 1 blocks = collect(filtered_count_gpu)[1] plot_blobs_f(filtered_XY_gpu, blank_slate, height, width, size(filtered_XY_gpu, 1))
     CUDA.synchronize()
-    save("assets/filtered_blobs_$(iter).png", colorview(RGB, Array(blank_slate)))
+    save("assets/filtered_blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
+    if iter == 1
+        save("assets/go/filtered_blobs.png", colorview(RGBA, Array(blank_slate)))
+    end
     blank_slate .= 0
     @cuda threads = 1 blocks = count plot_blobs_uf(XY_gpu, blank_slate, height, width, size(XY_gpu, 1), 0)
     CUDA.synchronize()
-    save("assets/blobs_$(iter).png", colorview(RGB, Array(blank_slate)))
+    save("assets/blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
+    if iter == 1
+        save("assets/go/blobs.png", colorview(RGBA, Array(blank_slate)))
+    end
     # CSV.write("assets/filtered_XY_i.csv", DataFrame(collect(transpose(collect(filtered_XY_gpu))), :auto))
     return time_taken, count, collect(orientation_gpu), collect(filtered_XY_gpu)
 end
 
 let
     println("Here we go!")
-    nImages = 2
+    nImages = 1
     img = []
     imgWidth = 0
     time_taken = 0
     # load the images
     for i in 1:nImages
         # img_temp = Float32.(Gray.(FileIO.load("assets/images/DJI_20240329_154936_17_null_beauty.mp4_frame_$(i+900).png")))
-        img_temp = Float32.(Gray.(FileIO.load("assets/images/20241203_000635.mp4_frame_$(i).png")))
+        # img_temp = Float32.(Gray.(FileIO.load("assets/images/20241203_000635.mp4_frame_$(i).png")))
+        # img_temp = Float32.(Gray.(FileIO.load("assets/images/$(i).png")))
+        img_temp = Float32.(Gray.(FileIO.load("assets/images/test blobs.png")))
         if i == 1
             img = img_temp
             imgWidth = size(img, 2)
