@@ -76,17 +76,12 @@ function col_kernel_strips_3(inp, conv, buffer, width::Int32, height::Int16, img
 	let
 		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 		threadNum::UInt16 = threadIdx().x - 1
-		# threads::Int16 = blockDim().x
 
-		# if blockNum == 0 && threadNum == 0
-		#     @cuprint("COL: size of inp: $(size(inp)), size of out/buffer: $(size(buffer))")
-		# end
-		# there could be more blocks than needed
-		# thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
 		thisX::Int32 =
-			imgWidth * (blockNum ÷ UInt32(imgWidth * cld(height, blockDim().x))) +
-			((blockNum % UInt32(imgWidth * cld(height, blockDim().x))) ÷ UInt32(cld(height, blockDim().x - 2 * apron))) + 1 # 1-indexed
-		thisY::Int16 = blockNum % cld(height, blockDim().x) * blockDim().x + threadNum + 1 # 1-indexed
+			imgWidth * (blockNum ÷ UInt32(imgWidth * cld(height, blockDim().x - 2 * apron))) +
+			((blockNum % UInt32(imgWidth * cld(height, blockDim().x - 2 * apron))) ÷ UInt32(cld(height, blockDim().x - 2 * apron))) + 1 # 1-indexed
+			
+		thisY::Int16 = blockNum % UInt32(cld(height, blockDim().x - 2 * apron)) * (blockDim().x - 2 * apron) - apron + threadNum + 1 # 1-indexed
 		thisPX::Int32 = thisY + (thisX - 1) * height # 1-indexed
 
 		data = CuDynamicSharedArray(Float32, blockDim().x)
@@ -99,7 +94,7 @@ function col_kernel_strips_3(inp, conv, buffer, width::Int32, height::Int16, img
 		end
 		sync_threads()
 		# convolution
-		if 0 < thisY <= height && 0 < thisX <= width && apron <= (threadIdx().x - 1) < (blockDim().x) - apron
+		if 0 < thisY <= height && 0 < thisX <= width && apron <= threadNum < blockDim().x - apron
 			sum::Float32 = 0.0
 			for i in -apron:apron
 				sum += @inbounds data[threadNum+1+i] * @inbounds conv[apron+1+i]
@@ -202,6 +197,48 @@ function row_kernel_2(inp, conv, out, height::Int16, width::Int32, imgWidth::Int
 	thisIsAComputationThread::Bool =
 		((iApron + apron) < thisY <= height - (iApron + apron)) && ((iApron + apron) < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth - (iApron + apron)) && (apron < threadIdx().y <= blockDim().y - apron) &&
 		((iApron + apron) < thisX <= width - (iApron + apron))
+
+	if thisIsAComputationThread
+		sum::Float32 = 0.0
+		for i in -apron:apron
+			sum += @inbounds data[threadNum+1+i*blockDim().x] * @inbounds conv[apron+1+i]
+		end
+		@inbounds out[thisY, thisX] = sum
+	end
+	return
+end
+
+
+function row_kernel_3(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16, apron::Int8)
+	# FOR CUDA registers, x is vertical and y is horizontal. So, threadIdx().x is vertical and threadIdx().y is horizontal
+	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+	threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
+	threads::Int16 = blockDim().x * blockDim().y
+
+	blocksInACol::Int8 = cld(height, blockDim().x)
+	blocksInARow::Int16 = cld(imgWidth, blockDim().y - 2 * apron)
+	blocksInAnImage::Int16 = blocksInACol * blocksInARow
+
+	thisY::Int16 = (blockNum % blocksInACol) * blockDim().x + threadIdx().x # 1-indexed
+	thisX::Int32 = (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2 * apron) + threadIdx().y - apron # 1-indexed
+
+	data = CuDynamicSharedArray(Float32, threads)
+
+	# fill the shared memory
+	begin
+		if 0 < thisY <= height 
+			if 0 < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth
+				thisPX::Int32 = thisY + (thisX - 1) * height
+				@inbounds data[threadNum+1] = @inbounds inp[thisPX]
+			else 
+				@inbounds data[threadNum+1] = 0.0
+			end
+		end
+	end
+	sync_threads()
+
+	thisIsAComputationThread::Bool =
+		(0 < thisY <= height) && (0 < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth) && (apron < threadIdx().y <= blockDim().y - apron) && (0 < thisX <= width)
 
 	if thisIsAComputationThread
 		sum::Float32 = 0.0
@@ -430,6 +467,137 @@ function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)#,
 	return
 end
 
+function blobs_2(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm)#, DoG4, DoG3, DoG2, DoG1)
+	threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
+	threads = blockDim().x * blockDim().y
+
+	data1 = CuDynamicSharedArray(Float32, threads)
+	data2 = CuDynamicSharedArray(Float32, threads, 1 * sizeof(Float32) * threads)
+	data3 = CuDynamicSharedArray(Float32, threads, 2 * sizeof(Float32) * threads)
+	data4 = CuDynamicSharedArray(Float32, threads, 3 * sizeof(Float32) * threads)
+
+	data1[threadNum] = 0.0
+	data2[threadNum] = 0.0
+	data3[threadNum] = 0.0
+	data4[threadNum] = 0.0
+	sync_threads()
+	# ground truth
+	# this thread has same x and y throughout the kernel. Blocklocal numbering is img - ap4 (top, bottom and verticals)
+	# when I process extrema in [data1, data2, data3], I need to check if the thread is outside the ap4 + 1 in all directions
+	# when I process extrema in [data2, data3, data4], I need to check if the thread is outside the ap5 + 1 in all directions
+
+	thisY::Int32, thisX::Int32= let
+		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+		blocksInACol::Int32 = cld(h - 2, blockDim().x - 2)
+		blocksInAnImage::Int32 = blocksInACol * cld(imgWidth - 2, blockDim().y - 2)
+
+		(blockNum % blocksInACol) * (blockDim().x - 2) + threadIdx().x - 1, # 0-indexed
+		(blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y - 1 # 0-indexed
+	end
+
+	thisPX::Int32 = thisY + thisX * h + 1
+
+	let
+		# shouldIProcess = (thisY < h && thisX % imgWidth < imgWidth)
+		# if (0 < thisPX <= h * w)
+		if (0 < thisY < h && 0 < thisX % imgWidth < imgWidth)
+			data1[threadNum] = @inbounds l1[thisY, thisX]
+			data2[threadNum] = @inbounds l2[thisY, thisX]
+			data1[threadNum] = (@inbounds data2[threadNum] - @inbounds data1[threadNum]) / norm
+			data3[threadNum] = @inbounds l3[thisY, thisX]
+			data2[threadNum] = (@inbounds data3[threadNum] - @inbounds data2[threadNum]) / norm
+			data3[threadNum] = (@inbounds l4[thisY, thisX] - @inbounds data3[threadNum]) / norm
+		end
+	end
+	sync_threads()
+
+	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h && thisX % imgWidth < imgWidth)
+		# data 2
+		thisO = max3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data2[threadNum])
+		thisO = max3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+		thisO = max3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
+
+		# data 3
+		thisO = max3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+		thisO = max3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+		thisO = max3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
+
+		# data 1
+		thisO = max3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
+		thisO = max3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
+		thisO = max3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
+
+		if thisO != data2[threadNum]
+			# data 2
+			thisO = min3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data2[threadNum])
+			thisO = min3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+			thisO = min3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
+
+			# data 3
+			thisO = min3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+			thisO = min3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+			thisO = min3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
+
+			# data 1
+			thisO = min3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
+			thisO = min3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
+			thisO = min3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
+		end
+		# @inbounds out1[thisPX] = abs(thisO)
+		@inbounds out1[thisY, thisX] = abs(thisO)
+		# @inbounds DoG1[thisPX] = data1[threadNum]
+		# @inbounds DoG2[thisPX] = data2[threadNum]
+		# @inbounds DoG3[thisPX] = data3[threadNum]
+	end
+	sync_threads()
+
+	if (thisY < h && thisX % imgWidth < imgWidth)
+		data4[threadNum] = @inbounds l4[thisY, thisX]
+		data4[threadNum] = (@inbounds l5[thisY, thisX] - data4[threadNum]) / norm
+	end
+	sync_threads()
+
+	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h && thisX % imgWidth < imgWidth)
+		# out2
+		# Unrolled loop for x = -1, 0, 1 and y = -1, 0, 1
+		# data 2
+		thisO = max3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data3[threadNum])
+		thisO = max3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+		thisO = max3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
+
+		# data 3
+		thisO = max3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+		thisO = max3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+		thisO = max3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
+
+		# data 1
+		thisO = max3(data4[threadNum-1-blockDim().x], data4[threadNum-blockDim().x], data4[threadNum+1-blockDim().x], thisO)
+		thisO = max3(data4[threadNum-1], data4[threadNum], data4[threadNum+1], thisO)
+		thisO = max3(data4[threadNum-1+blockDim().x], data4[threadNum+blockDim().x], data4[threadNum+1+blockDim().x], thisO)
+
+		if thisO != data3[threadNum]
+			# data 2
+			thisO = min3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data3[threadNum])
+			thisO = min3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
+			thisO = min3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
+
+			# data 3
+			thisO = min3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
+			thisO = min3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
+			thisO = min3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
+
+			# data 1
+			thisO = min3(data4[threadNum-1-blockDim().x], data4[threadNum-blockDim().x], data4[threadNum+1-blockDim().x], thisO)
+			thisO = min3(data4[threadNum-1], data4[threadNum], data4[threadNum+1], thisO)
+			thisO = min3(data4[threadNum-1+blockDim().x], data4[threadNum+blockDim().x], data4[threadNum+1+blockDim().x], thisO)
+		end
+		# @inbounds out2[thisPX] = abs(thisO)
+		@inbounds out2[thisY, thisX] = abs(thisO)
+		# @inbounds DoG4[thisPX] = data1[threadNum]
+	end
+	return
+end
+
 function testBlobs(l3, l2, l1, out2, out1, h, w, imgWidth, ap4)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
@@ -545,7 +713,7 @@ function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins,
 
 	x = X + threadIdx().y - r - 2 # 1-indexed
 	y = Y + threadIdx().x - r - 2 # 1-indexed
-	# sync_threads()
+	sync_threads()
 
 	# load elements around XY from the octave
 	let
