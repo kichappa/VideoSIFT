@@ -43,6 +43,7 @@ share/python-wheels/
 MANIFEST
 
 orientations.csv
+orientations_i.csv
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -178,3 +179,4 @@ cython_debug/
 #.idea/
 convolve.0.col.ncu-rep
 convolve.0.row.ncu-rep
+assets/orientations.csv
