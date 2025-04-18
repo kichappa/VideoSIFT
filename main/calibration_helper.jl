@@ -1,5 +1,8 @@
 using Statistics, UnPack, JLD2, Glob
+# This file contains functions for camera calibration using OpenCV and Julia.
 
+# Function to undistort a point using the camera matrix and distortion coefficients.
+# This function uses an iterative approach to undistort the point.
 function undistort_point(mtx, dist_coeffs, xy_distort; num_iters = 5, debug = false)
 	fx = mtx[1, 1]
 	fy = mtx[2, 2]
@@ -34,6 +37,7 @@ function undistort_point(mtx, dist_coeffs, xy_distort; num_iters = 5, debug = fa
 	return [u_undist, v_undist]
 end
 
+# Function to undistort a set of points using the camera matrix and distortion coefficients.
 function undistortPoints(points, mtx, dist_coeffs, num_iters = 5)
 	undistorted_points = zeros(Float32, 2, length(points))
 	for (i, point) in enumerate(points)
@@ -42,6 +46,9 @@ function undistortPoints(points, mtx, dist_coeffs, num_iters = 5)
 	return undistorted_points
 end
 
+#-----------------------------------------------------------------------------------------------------------------------
+# Function to extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
+# Overloaded to accept either a frame number or a frame name and direct data matrices or a JLD data file.
 function extract_matrices(cam, frame::Integer, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr)
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	K = mtx_arr[cam]
@@ -89,18 +96,22 @@ function extract_matrices(cam, frame_name::String, jld_file)
 	end
 	return extract_matrices(cam, frame_name, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
 end
+# -----------------------------------------------------------------------------------------------------------------------
 
+# low level function to calculate reprojection error
+# uses cv2.projectPoints to project the 3D points to the image plane
 function __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
 	reproj_err = Vector{Float64}(undef, length(objpoints))
 	for i in 1:length(objpoints)
 		imgPoints2, jac = cv.projectPoints(objpoints[i], rvecs[i-1], tvecs[i-1], mtx, dist)
-		# println(imgPoints2)
 		err = cv.norm(imgpoints[i], imgPoints2, cv.NORM_L2) / length(imgPoints2)
 		reproj_err[i] = pyconvert(Float64, err)
 	end
 	return reproj_err
 end
 
+# low level function to find chessboard corners
+# uses cv2.findChessboardCorners to find the corners of the chessboard pattern
 function __findChessboardCorners(jl_img, cb_grid, cv, np; criteria = nothing, invert = false)
 	if isnothing(criteria)
 		criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -131,6 +142,8 @@ function __findChessboardCorners(jl_img, cb_grid, cv, np; criteria = nothing, in
 	end
 end
 
+# This function is a wrapper around the __findChessboardCorners function.
+# Overloaded to accept either a file name or an image array.
 function findChessboardCorners(image::String, cb_grid; criteria = nothing, cv = cv, np = np, invert = false)
 	return __findChessboardCorners(FileIO.load(image), cb_grid, cv, np; criteria = criteria, invert = invert)
 end
@@ -161,7 +174,7 @@ function findChessboardCorners(image::Vector, cb_grid; criteria = nothing, cv = 
 	return rets, corners
 end
 
-
+# Function to convert a video file to frames and save them to a directory.
 function videoToFrames(file; path = nothing, dir_name = nothing, filename = nothing, ext = "png", num_images = nothing, stride = 1)
 	if isnothing(dir_name)
 		dir_name = "calibration"
@@ -193,6 +206,8 @@ function videoToFrames(file; path = nothing, dir_name = nothing, filename = noth
 	end
 end
 
+# Function to get a frame from a video file.
+# Overloaded to accept either a VideoIO.VideoReader object or a file name.
 function getFrame(v::VideoIO.VideoReader, frame, fps=25)
 	seek(v, frame/fps)
 	return read(v)
@@ -204,6 +219,7 @@ function getFrame(v::String, frame, fps=25)
 	return read(v)
 end
 
+# low level function to find chessboard corners
 function __calibrateCamera(py_img, filename, count, camera, i, cb_grid, objp, objpoints, imgpoints, filenames; criteria = nothing, save = false, ret_py = false, debug = false, cv = nothing, np = nothing, target_dir = nothing, win_size = (11, 11))
 	if isnothing(cv)
 		cv = pyimport("cv2")
@@ -244,6 +260,9 @@ function __calibrateCamera(py_img, filename, count, camera, i, cb_grid, objp, ob
 	return count
 end
 
+# This function calibrates the camera using the chessboard pattern.
+# It is a wrapper around the OpenCV function cv2.calibrateCamera, and cv2.findChessboardCorners through __calibrateCamera().
+# This wrapper is extremely flexible, and can be used to calibrate cameras or solvePnP if given the correct intrinsic matrix and distortion coefficients.
 function calibrateCamera(
 	target_dir,
 	num_cameras,
@@ -278,6 +297,8 @@ function calibrateCamera(
 
 	println("Calibrating $(num_cameras) camera(s) in $(target_dir), keyword criteria: $(criteria), save: $(save), ret_py: $(ret_py)")
 
+
+	# Basic sanity checks
 	if typeof(num_cameras) == Int
 		@assert num_cameras > 0 "Number of cameras must be greater than 0"
 	end
@@ -316,7 +337,6 @@ function calibrateCamera(
 		cb_grid = cb_grid[[2, 3]]
 	end
     println("py_cb_grid: $cb_grid")
-    # print(sparse(objp))
 
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_err_arr = [], [], [], [], [], []
 
@@ -328,15 +348,13 @@ function calibrateCamera(
 	if debug
 		println("Camera array: ", num_cameras)
 	end
-	# for i in 1:num_cameras
+	
+	# Iterate over each camera to find the chessboard corners in each image of a camera
 	for i in num_cameras
 		camera = findfirst(x -> x == i, num_cameras)
 		filenames[camera] = Vector{String}()
 		objpoints = []
 		imgpoints = []
-		# objpoints_local = [Vector{Any}() for _ in 1:Threads.nthreads()]
-		# imgpoints_local = [Vector{Any}() for _ in 1:Threads.nthreads()]
-		# filenames_local = [Vector{String}() for _ in 1:Threads.nthreads()]
 		jl_img = nothing
 		if debug
 			if from_video
@@ -347,8 +365,6 @@ function calibrateCamera(
 			end
 		end
 		count = 0
-		# count = Threads.Atomic{Int}(0) 
-		#Threads.@threads 
 		jl_img = nothing
 		if from_video
 			# check if target_dir is a video file or a directory
@@ -450,47 +466,9 @@ function calibrateCamera(
 					catch
 						continue
 					end
-					# ret, corners = cv.findChessboardCorners(py_img, cb_grid, nothing)
-
-					# if pyconvert(Bool, ret)
-					# 	println(" success ✅")
-
-					# 	# Threads.atomic_add!(count, 1)
-					# 	count += 1
-
-					# 	push!(objpoints, np.array(objp'))
-					# 	corners = cv.cornerSubPix(cv.cvtColor(py_img, cv.COLOR_BGR2GRAY), corners, (11, 11), (-1, -1), criteria)
-					# 	push!(imgpoints, corners)
-
-					# 	# push!(objpoints_local[tid], np.array(objp'))
-					# 	# push!(imgpoints_local[tid], corners)
-					# 	# push!(filenames_local[tid], filename)
-
-					# 	cv.drawChessboardCorners(py_img, cb_grid, corners, ret)
-					# 	# count += 1
-					# 	# filename without extension
-					# 	if !isdir(target_dir * string(i) * "/corners")
-					# 		mkdir(target_dir * string(i) * "/corners")
-					# 	end
-					# 	push!(filenames[camera], filename)
-					# 	if save
-					# 		println("\t... saving to $(target_dir * string(i) * "/corners/$(splitext(filename)[1])_corners$(splitext(filename)[2])")")
-					# 		try
-					# 			cv.imwrite(target_dir * string(i) * "/corners/$(splitext(filename)[1])_corners$(splitext(filename)[2])", py_img)
-					# 		catch e
-					# 			println("Error saving image: ", e)
-					# 		end
-					# 	end
-					# else
-					# 	println(" failed ❌")
-					# end
 				end
 			end
 		end
-
-		# objpoints = reduce(vcat, objpoints_local)
-		# imgpoints = reduce(vcat, imgpoints_local)
-		# append!(filenames[camera], reduce(vcat, filenames_local))
 
 		if jl_img == nothing
 			println("No images found for camera $(i)")
@@ -503,6 +481,8 @@ function calibrateCamera(
 			print("Camera $(i): calibration...")
 		end
 
+		# Calibrate the camera using the chessboard corners if we are calibrating
+		# Otherwise, use the guess_mtx and guess_dist to solvePnP
 		ret, mtx, dist, rvecs, tvecs, inliers = nothing, nothing, nothing, nothing, nothing, nothing
 		if RO
 			if isnothing(guess_mtx)
@@ -563,6 +543,7 @@ function calibrateCamera(
 		end
 		println(" complete!")
 		
+		# Refine the camera matrix and distortion coefficients using the RANSAC or LM algorithm if requested
 		if refineLM
 			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
 			println("\tError before RefineLM: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
@@ -595,7 +576,6 @@ function calibrateCamera(
 				rvecs[j-1] = rvec
 				tvecs[j-1] = tvec
 			end
-			# rvec, tvec = cv.solvePnPRefineLM(objpoints, imgpoints, guess_mtx[findfirst(x -> x == i, num_cameras)], guess_dist[findfirst(x -> x == i, num_cameras)], rvecs, tvecs)
 		end
 
 		reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
@@ -617,28 +597,7 @@ function calibrateCamera(
 		push!(reproj_err_arr, reproj_err)
 	end
 
-	# println("typeof(tvecs_arr) = $(typeof(tvecs_arr))")
-	# println("typeof(tvecs_arr[1]) = $(typeof(tvecs_arr[1]))")
-	# println("tvecs_arr[1][1] = $(tvecs_arr[1][1]) (of type $(typeof(tvecs_arr[1][1])))")
-	# count = 0
-	# i = 1
-	# j = 0
-# 	try
-# 	for y in tvecs_arr
-# 		println("size of tvecs_arr[$i] = $(size(y))")
-# 		i+=1
-	
-# 	# 	for x in y
-# 	# 		println("($j, $i): $x --> $(pyconvert(Matrix, x))\n")
-# 	# 		i+=1
-# 	# 		j+=1
-# 	# 		# if count > 3
-# 	# 		# 	break
-# 	# 		# end
-# 	# 	end
-# 	end
-# catch
-# end
+	# Convert the Python objects to Julia objects for the remaining pipeline
 
 	# ret_arr::Vector{Float64}.
 	# Usage: ret_arr[i]::Float64 = calibration error for camera i 
@@ -658,9 +617,6 @@ function calibrateCamera(
 
 	# tvecs_arr::Vector{Matrix{Float64}}.
 	# Usage: tvecs_arr[i][:,j]::Vector{Float64} = translation vector for j-th image in camera i
-	# i1 = 0
-	# i2 = 0
-	# begin i1; i2; println("($i1, $i2)"); i1+=1; i2+=1; 
 	jl_tvecs_arr = [reduce(hcat, [pyconvert(Matrix, x) for x in collect(y)]) for y in tvecs_arr]
 
 	if ret_py
@@ -672,6 +628,10 @@ function calibrateCamera(
 	end
 end
 
+
+# Function to calibrate the camera using the chessboard pattern.
+# Uses num_images[1] images in a strided manner to find the chessboard corners, and calibrates the camera using the found corners and get the intrinsic data.
+# Uses this data to solvePnP for the remaining num_images[2] images in the video.
 function calibrate(
 	target_dir,
 	num_cameras,

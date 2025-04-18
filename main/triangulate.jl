@@ -32,6 +32,8 @@ function distance3D(K1, dist1, R1, t1, K2, dist2, R2, t2, p1, p2; num_iters = 5)
 	return d
 end
 
+# function to calculate the intersection point of two rays in 3D space
+# this method is not statiscally stable, but it is fast and works decently well in practice
 function intersection3D(K1, dist1, R1, t1, K2, dist2, R2, t2, p1, p2; num_iters = 5)
 	# Undistort the input pixel coordinates
 	p1_undist = undistort_point(K1, dist1, p1; num_iters = num_iters)
@@ -78,31 +80,28 @@ function intersection3D(K1, dist1, R1, t1, K2, dist2, R2, t2, p1, p2; num_iters 
 	return (q1 + q2) / 2
 end
 
+# ------------------------------------------------------------------------------------------------------------------------
+# functions to find the intersection of two rays in 3D space in a statistically stable way
+# solves x1 cross P1 X = 0 and x2 cross P2 X = 0
+# where P1 and P2 are the camera matrices
+# x is the pixel coordinates in each view
+# X is the 3D point in space to be found
+# uses CUDA to speed up the process
+
+# function to calculate the normization matrix for a view
 function compute_T(points)
 	μ = mean!(ones(2, 1, size(points, 3)), points)
-	scale = sqrt(2) ./ dropdims(mean!(ones(1, 1, size(points, 3)), sqrt.(sum((points .- μ).^2, dims = 1))), dims = (1, 2))
+	scale = sqrt(2) ./ dropdims(mean!(ones(1, 1, size(points, 3)), sqrt.(sum((points .- μ) .^ 2, dims = 1))), dims = (1, 2))
 	μ = dropdims(μ, dims = 2)
-	# for view in axes(points, 3)
-	# 	T = [scale[view] 	0 				-scale[view] * μ[1, view];
-	# 		0 				scale[view] 	-scale[view] * μ[2, view];
-	# 		0 				0 				1]
-	# 	push!(Ts, CuArray(T))
-	# end
-	# Ts = [CuArray([
-	# 		scale[view]		0 			-scale[view] * μ1[1, view]; 
-	# 		0				scale[view] -scale[view] * μ1[2, view];
-	# 		0				0			1
-	# 	 ]
-	# 	) for view in axes(points, 3)]
-	
+
 	μ = CuArray(μ)
 	scale = CuArray(scale)
 	Ts = CUDA.zeros(eltype(scale), 3, 3, size(points, 3))
-	Ts[1,1,:] .= scale
-	Ts[1,3,:] .= -scale .* μ[1,:]
-	Ts[2,2,:] .= scale
-	Ts[2,3,:] .= -scale .* μ[2,:]
-	Ts[3,3,:] .= 1f0
+	Ts[1, 1, :] .= scale
+	Ts[1, 3, :] .= -scale .* μ[1, :]
+	Ts[2, 2, :] .= scale
+	Ts[2, 3, :] .= -scale .* μ[2, :]
+	Ts[3, 3, :] .= 1.0f0
 	return Ts
 end
 
@@ -115,19 +114,15 @@ end
 function triangulate_batched(Ks, Rs, ts, points)
 	N = size(points, 2) # number of points
 	M = size(points, 3) # number of views
-	
+
 	Ts = compute_T(points)
-	# points = CuArray(cat(points, ones(1, size(points, 2), size(points, 3)), dims = 1))
 	points_homog = CUDA.ones(3, N, M)
 	points_homog[1:2, :, :] .= CuArray(points)
-	# Ps = [CuArray(Ks[i]) * CuArray(hcat(R[i], t[i])) for i in axes(Rs, 1)]
 	Ps = CUDA.zeros(Float32, 3, 4, M)
 	println(Ks)
 	println(Rs)
 	println(ts)
 	for i in axes(Ks, 1)
-		# println(hcat(Rs[i][:, :], ts[i]))
-		# println(Ks[i])
 		Ps[:, :, i] .= CuArray(Ks[i]) * CuArray(hcat(Rs[i][:, :], ts[i]))
 	end
 
@@ -136,67 +131,68 @@ function triangulate_batched(Ks, Rs, ts, points)
 	Ps_norm = batched_mul(Ts, Ps)
 
 	# Preallocate output [3×N×(M-1)]
-	triangulated_points = CUDA.zeros(Float32, 3, N, M-1)
+	triangulated_points = CUDA.zeros(Float32, 3, N, M - 1)
 	for pair in 1:M-1
-        triangulated_points[:,:,pair] = triangulate_pair(
-            Ps_norm[:,:,pair], 
-            Ps_norm[:,:,pair+1],
-            points_norm[:,:,pair],
-            points_norm[:,:,pair+1], 
-			Ts[:,:,pair],
-			Ts[:,:,pair+1]
-        )
-    end
+		triangulated_points[:, :, pair] = triangulate_pair(
+			Ps_norm[:, :, pair],
+			Ps_norm[:, :, pair+1],
+			points_norm[:, :, pair],
+			points_norm[:, :, pair+1],
+			Ts[:, :, pair],
+			Ts[:, :, pair+1],
+		)
+	end
 
 	return collect(triangulated_points)
 end
 
+# function to triangulate a pair of points given the camera matrices and points
 function triangulate_pair(P1, P2, pts1, pts2, T1, T2)
 	N = size(pts1, 2)
 	A_batch = CUDA.zeros(Float32, 4, 4, N)
 
 	# kernel to fill the A matrix
 	function kernel_fill_A!(P1, P2, pts1, pts2, A_batch, N)
-        i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-        if i <= N
-            x1 = pts1[1,i]
-            y1 = pts1[2,i]
-            x2 = pts2[1,i]
-            y2 = pts2[2,i]
-            
-            @inbounds begin
+		i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+		if i <= N
+			x1 = pts1[1, i]
+			y1 = pts1[2, i]
+			x2 = pts2[1, i]
+			y2 = pts2[2, i]
+
+			@inbounds begin
 				# First camera equations
-                A_batch[1,1,i] = x1*P1[3,1] - P1[1,1]
-                A_batch[1,2,i] = x1*P1[3,2] - P1[1,2]
-                A_batch[1,3,i] = x1*P1[3,3] - P1[1,3]
-                A_batch[1,4,i] = x1*P1[3,4] - P1[1,4]
-                
-                A_batch[2,1,i] = y1*P1[3,1] - P1[2,1]
-                A_batch[2,2,i] = y1*P1[3,2] - P1[2,2]
-                A_batch[2,3,i] = y1*P1[3,3] - P1[2,3]
-                A_batch[2,4,i] = y1*P1[3,4] - P1[2,4]
-                
-                # Second camera equations
-                A_batch[3,1,i] = x2*P2[3,1] - P2[1,1]
-                A_batch[3,2,i] = x2*P2[3,2] - P2[1,2]
-                A_batch[3,3,i] = x2*P2[3,3] - P2[1,3]
-                A_batch[3,4,i] = x2*P2[3,4] - P2[1,4]
-                
-                A_batch[4,1,i] = y2*P2[3,1] - P2[2,1]
-                A_batch[4,2,i] = y2*P2[3,2] - P2[2,2]
-                A_batch[4,3,i] = y2*P2[3,3] - P2[2,3]
-                A_batch[4,4,i] = y2*P2[3,4] - P2[2,4]
-            end
-        end
-        return
-    end
-    
-    # Launch kernel
-    threads = 256
-    blocks = cld(N, threads)
-    @cuda threads=threads blocks=blocks kernel_fill_A!(P1, P2, pts1, pts2, A_batch, N)
-    
-	# Compute SVD
+				A_batch[1, 1, i] = x1 * P1[3, 1] - P1[1, 1]
+				A_batch[1, 2, i] = x1 * P1[3, 2] - P1[1, 2]
+				A_batch[1, 3, i] = x1 * P1[3, 3] - P1[1, 3]
+				A_batch[1, 4, i] = x1 * P1[3, 4] - P1[1, 4]
+
+				A_batch[2, 1, i] = y1 * P1[3, 1] - P1[2, 1]
+				A_batch[2, 2, i] = y1 * P1[3, 2] - P1[2, 2]
+				A_batch[2, 3, i] = y1 * P1[3, 3] - P1[2, 3]
+				A_batch[2, 4, i] = y1 * P1[3, 4] - P1[2, 4]
+
+				# Second camera equations
+				A_batch[3, 1, i] = x2 * P2[3, 1] - P2[1, 1]
+				A_batch[3, 2, i] = x2 * P2[3, 2] - P2[1, 2]
+				A_batch[3, 3, i] = x2 * P2[3, 3] - P2[1, 3]
+				A_batch[3, 4, i] = x2 * P2[3, 4] - P2[1, 4]
+
+				A_batch[4, 1, i] = y2 * P2[3, 1] - P2[2, 1]
+				A_batch[4, 2, i] = y2 * P2[3, 2] - P2[2, 2]
+				A_batch[4, 3, i] = y2 * P2[3, 3] - P2[2, 3]
+				A_batch[4, 4, i] = y2 * P2[3, 4] - P2[2, 4]
+			end
+		end
+		return
+	end
+
+	# Launch kernel
+	threads = 256
+	blocks = cld(N, threads)
+	@cuda threads = threads blocks = blocks kernel_fill_A!(P1, P2, pts1, pts2, A_batch, N)
+
+	# Compute SVD in a batched manner on the GPU
 	F = CUDA.svd(A_batch)
 
 	# Extract the last column of V (the right singular vectors)
@@ -204,8 +200,6 @@ function triangulate_pair(P1, P2, pts1, pts2, T1, T2)
 	triangulated_points = V[begin:end-1, 4, :] ./ V[4, 4, :]'
 
 	# Rescale the triangulated points
-	# triangulated_points = (T1\triangulated_points + T2\triangulated_points) * 0.5f0
-
 	return triangulated_points
 end
 
@@ -228,7 +222,6 @@ function triangulatePoints(points, image_names, cams, datafile)
 	distances = zeros(size(points)[[2, 2, 3]])
 	for view1 in axes(points, 3)
 		view2 = (view1) % size(points, 3) + 1
-		# println("Calculating distance for camera $(view1) and $(view2). Distortion coefficients: ", d[view1], " ", d[view2])
 		for i in axes(points, 2)
 			for j in axes(points, 2)
 				distances[i, j, view1] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[:, 1, view1], points[:, j, view2])
@@ -241,7 +234,7 @@ function triangulatePoints(points, image_names, cams, datafile)
 		push!(assignments, assignment)
 	end
 
-	cumulative_assignments = zeros(Int, size(points, 2), size(points, 3)+1)
+	cumulative_assignments = zeros(Int, size(points, 2), size(points, 3) + 1)
 	cumulative_assignments[:, 1] = 1:size(points, 2)
 	for view in axes(points, 3)
 		cumulative_assignments[:, view+1] = assignments[view][cumulative_assignments[:, view]]
@@ -254,13 +247,6 @@ function triangulatePoints(points, image_names, cams, datafile)
 	end
 
 	reconstructed_points = zeros(Float32, 3, size(points, 2), size(points, 3))
-	# for view1 in axes(points, 3)
-	# 	for i in axes(points, 2)
-	# 		# calculate the intersection point
-	# 		view2 = (view1) % size(points, 3) + 1
-	# 		reconstructed_points[:, i, view1] = intersection3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[:, i, view1], points[:, assignments[view1][i], view2])
-	# 	end
-	# end
 
 	reconstructed_points[:, :, begin:end-1] = triangulate_batched(K, R, t, matched_points)
 

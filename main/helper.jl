@@ -1,5 +1,6 @@
 using CUDA, Printf
 
+# Function to get the Gaussian kernel of a given size and radius
 function getGaussianKernel(ksize, sigma)
     kernel = CUDA.zeros(Float32, ksize)
     kernel = exp.(-0.5 * ((0:ksize-1) .- (ksize - 1) / 2) .^ 2 / sigma^2)

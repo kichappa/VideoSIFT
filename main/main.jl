@@ -17,11 +17,13 @@ let
 	time_taken = 0
 	iterations = 1
 
+	# multiple ways to process images. Could be a video file, video stream, or images that will be concatenated.
+
 	# v = Vector{VideoIO.VideoReader}(undef, cameras)
 	# for views in 1:cameras
 	# 	v[views] = VideoIO.openvideo("assets/videos/view$(views).mp4")
 	# end
-
+	
 	v = []
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam1/DSC_0048.JPG"))))
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam2/DSC_0083.JPG"))))
@@ -45,12 +47,6 @@ let
 
 	# load the images
 	for i in 1:cameras
-		# img_temp = Float32.(Gray.(FileIO.load("assets/images/DJI_20240329_154936_17_null_beauty.mp4_frame_$(i+900).png")))
-		# img_temp = Float32.(Gray.(FileIO.load("assets/images/20241203_000635.mp4_frame_$(i).png")))
-		# img_temp = Float32.(Gray.(FileIO.load("assets/images/$(i).png")))
-		# img_temp = Float32.(Gray.(FileIO.load("assets/images/test blobs.png")))
-
-		# img_temp = Gray.(read(v[i]))
 		img_temp = v[i]	
 		if i == 1
 			img = img_temp
@@ -63,7 +59,7 @@ let
 	height, width = size(img)
 	println(size(img))
 
-	octaves = 5 # hard coded in the blobs kernel
+	octaves = 5 # not hard coded in the blobs kernel
 	layers = 5 # hard coded in the extractBlobXYs function and orientation kernel
 
 	sigma0 = 1.6
@@ -72,24 +68,7 @@ let
     time_taken, count, orientations, blobs, XY_gpu = getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0, k, iterations, time_taken)
 	
 	println("Got the blobs...")
-	# for j in 1:octaves
-	#     for i in 1:2
-	#         max = CUDA.maximum(DoG_gpu[j][i])
-	#         if max .!= 0
-	#             DoG_gpu[j][i] = DoG_gpu[j][i] ./ max
-	#             # DoG_gpu[j][i] = DoG_gpu[j][i]
-	#         end
-	#         save("assets/DoG_nov24_o$(j)l$(i).png", colorview(Gray, Array(DoG_gpu[j][i])))
 
-	#         max = CUDA.maximum(DoGo_gpu[j][i])
-	#         min = CUDA.minimum(DoGo_gpu[j][i])
-	#         if max - min .!= 0
-	#             DoGo_gpu[j][i] = (DoGo_gpu[j][i] .- min) ./ (max - min)
-	#             # DoGo_gpu[j][i] = (DoGo_gpu[j][i] .- min)
-	#         end
-	#         save("assets/DoG_raw_nov24_o$(j)l$(i).png", colorview(Gray, Array(DoGo_gpu[j][i])))
-	#     end
-	# end
 	println("count: $count, size of XY_gpu: $(size(XY_gpu))")
 	XY = [[b.thisX, b.y, b.thisImg, b.x, b.oct, b.lay][i] for b in collect(XY_gpu), i in 1:6]
 	println("Total potential blobs: $count, utilization: $(round(count / size(XY_gpu)[1]*100, digits=2))%")

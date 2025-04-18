@@ -1,3 +1,5 @@
+# Structs for the potential blobs
+# This struct is used inside CUDA kernels
 struct potential_blob
 	thisX::Int64 # 1
 	y::Int32 # 2

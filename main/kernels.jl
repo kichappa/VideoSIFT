@@ -1,78 +1,6 @@
 include("helper.jl")
 
-function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron::Int8)
-	let
-		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-		threadNum::UInt16 = threadIdx().x - 1
-		# threads::Int16 = blockDim().x
-
-		# if blockNum == 0 && threadNum == 0
-		#     @cuprintln("COL: size of inp: $(size(inp)), size of out/buffer: $(size(buffer))")
-		# end
-		# there could be more blocks than needed
-		# thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
-		thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (blockDim().x - 2 * apron))) + 1 # 1-indexed
-		thisY::Int16 = blockNum % cld((height - 2 * apron), (blockDim().x - 2 * apron)) * (blockDim().x - 2 * apron) + (threadIdx().x - 1) + 1 # 1-indexed
-		thisPX::Int32 = 0
-
-		data = CuDynamicSharedArray(Float32, blockDim().x)
-
-		# fill the shared memory
-		if thisY <= height && thisX <= width
-			thisPX = thisY + (thisX - 1) * height
-			data[threadNum+1] = inp[thisPX]
-			# data[threadIdx().x] = inp[thisPX]
-		end
-		sync_threads()
-		# convolution
-		if apron < thisY <= height - apron && thisX <= width && apron <= (threadIdx().x - 1) < (blockDim().x) - apron
-			sum::Float32 = 0.0
-			for i in -apron:apron
-				sum += data[threadNum+1+i] * conv[apron+1+i]
-			end
-			buffer[thisY, thisX] = sum
-		end
-	end
-	return
-end
-
-function col_kernel_strips_2(inp, conv, buffer, width::Int32, height::Int16, imgWidth::Int16, iApron::Int8, apron::Int8)
-	let
-		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-		threadNum::UInt16 = threadIdx().x - 1
-		# threads::Int16 = blockDim().x
-
-		# if blockNum == 0 && threadNum == 0
-		#     @cuprint("COL: size of inp: $(size(inp)), size of out/buffer: $(size(buffer))")
-		# end
-		# there could be more blocks than needed
-		# thisX::Int32 = blockNum ÷ Int32(cld((height - 2 * apron), (threads - 2 * apron))) + 1 # 1-indexed
-		thisX::Int32 =
-			iApron + imgWidth * (blockNum ÷ UInt32((imgWidth - 2 * iApron) * cld((height - 2 * (iApron + apron)), (blockDim().x - 2 * apron)))) +
-			((blockNum % UInt32((imgWidth - 2 * iApron) * cld((height - 2 * (iApron + apron)), (blockDim().x - 2 * apron)))) ÷ UInt32(cld((height - 2 * (iApron + apron)), (blockDim().x - 2 * apron)))) + 1 # 1-indexed
-		thisY::Int16 = iApron + (blockNum % cld((height - 2 * (iApron + apron)), (blockDim().x - 2 * apron)) * (blockDim().x - 2 * apron) + threadNum + 1) # 1-indexed
-		thisPX::Int32 = thisY + (thisX - 1) * height # 1-indexed
-
-		data = CuDynamicSharedArray(Float32, blockDim().x)
-
-		# fill the shared memory
-		if iApron < thisY <= height - iApron && iApron < thisX <= width - iApron && 0 < thisPX <= height * width
-			@inbounds data[threadNum+1] = @inbounds inp[thisPX]
-		end
-		sync_threads()
-		# convolution
-		if (apron + iApron) < thisY <= height - (apron + iApron) && iApron < thisX <= width - iApron && apron <= (threadIdx().x - 1) < (blockDim().x) - apron
-			sum::Float32 = 0.0
-			for i in -apron:apron
-				sum += @inbounds data[threadNum+1+i] * @inbounds conv[apron+1+i]
-			end
-			@inbounds buffer[thisPX] = sum
-		end
-	end
-	return
-end
-
-function col_kernel_strips_3(inp, conv, buffer, width::Int32, height::Int16, imgWidth::Int16, apron::Int8)
+function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, imgWidth::Int16, apron::Int8)
 	let
 		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 		threadNum::UInt16 = threadIdx().x - 1
@@ -107,118 +35,18 @@ end
 
 # buffH is the height of the buffer including the black apron at the bottom
 # inpH is the height of the image excluding the aprons, after the column kernel
-function row_kernel(inp, conv, out, inpH::Int16, buffH::Int16, width::Int32, imgWidth::Int16, apron::Int8)
-	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-	# threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
-	# threads::Int16 = blockDim().x * blockDim().y
 
-
-	# if blockNum == 0 && (threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x) == 0
-	#     @cuprintln("ROW: size of inp: $(size(inp)), size of out: $(size(out))")
-	# end
-	if true #threads <= width
-
-		# blocksInACol::Int8 = cld(inpH, blockDim().x)
-		blocksInARow::Int16 = cld(imgWidth - 2 * apron, blockDim().y - 2 * apron)
-		# blocksInAnImage::Int16 = blocksInACol * blocksInARow
-		blocksInAnImage::Int16 = cld(inpH, blockDim().x) * blocksInARow
-		# #             |  number of images to the left * imgWidth |   blockNum wrt this image ÷ blocksInAColumn   * thrds in x   | number of threads on the left|
-		# thisX::Int32 = fld(blockNum, blocksInAnImage) * imgWidth + fld(blockNum % blocksInAnImage, blocksInACol) * blockDim().y + threadIdx().y # 1-indexed
-		# thisY::Int16 = blockNum % blocksInACol * blockDim().x + threadIdx().x # 1-indexed
-
-		# thisImage::Int8 = blockNum ÷ blocksInAnImage # 0-indexed
-		# thisBlockNum::Int16 = blockNum % blocksInAnImage # 0-indexed
-
-		thisX::Int32 = (blockNum ÷ blocksInAnImage) * imgWidth + ((blockNum % blocksInAnImage) % blocksInARow) * (blockDim().y - 2 * apron) + threadIdx().y # 1-indexed
-		thisY::Int16 = ((blockNum % blocksInAnImage) ÷ blocksInARow) * blockDim().x + threadIdx().x + apron # 1-indexed
-
-		data = CuDynamicSharedArray(Float32, (blockDim().x, blockDim().y))
-
-		begin
-			# fill the shared memory
-			thisPX::Int32 = thisY + (thisX - 1) * buffH
-			if thisX <= width && thisY <= inpH + apron
-				data[(threadIdx().x-1+(threadIdx().y-1)*blockDim().x)+1] = inp[thisPX]
-			end
-		end
-		sync_threads()
-
-		# if (threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x)==0 && blockNum==0
-		#     @cuprintln("Size of inp: $(size(inp)), size of out: $(size(out)), size of data: $(size(data))")
-		# end
-
-		thisIsAComputationThread::Bool = thisY <= inpH + apron && apron < thisX <= width - apron && apron < threadIdx().y <= blockDim().y - apron
-		if (blockNum % blocksInAnImage) % blocksInARow == blocksInARow - 1
-			thisIsAComputationThread = thisIsAComputationThread && (thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth - 2 * apron)
-		end
-		begin
-			# convolution
-			# if thisY == 1073 && apron==6 && thisX > 3900
-			#     @cuprintln("isThisAComputationThread: $(thisIsAComputationThread), thisX: $thisX)")
-			# end
-			if thisIsAComputationThread
-				sum::Float32 = 0.0
-				for i in -apron:apron
-					sum += data[(threadIdx().x-1+(threadIdx().y-1)*blockDim().x)+1+i*blockDim().x] * conv[apron+1+i]
-				end
-				# out[thisY, thisX-apron-fld(blockNum, blocksInAnImage)*2*apron] = sum
-				out[thisY, thisX] = sum
-				# out[thisY-apron, thisX-apron] = sum
-			end
-		end
-	end
-	return
-end
-
-function row_kernel_2(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16, iApron::Int8, apron::Int8)
-	# FOR CUDA registers, x is vertical and y is horizontal. So, threadIdx().x is vertical and threadIdx().y is horizontal
+function row_kernel_3(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16, apron::Int8)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
 	threads::Int16 = blockDim().x * blockDim().y
 
-	blocksInACol::Int8 = cld(height - 2 * (iApron + apron), blockDim().x)
-	blocksInARow::Int16 = cld(imgWidth - 2 * (iApron + apron), blockDim().y - 2 * apron)
-	blocksInAnImage::Int16 = blocksInACol * blocksInARow
-
-	thisY::Int16 = iApron + apron + (blockNum % blocksInACol) * blockDim().x + threadIdx().x # 1-indexed
-	thisX::Int32 = iApron + (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2 * apron) + threadIdx().y # 1-indexed
-
-	data = CuDynamicSharedArray(Float32, threads)
-
-	# fill the shared memory
-	begin
-		if (iApron + apron) < thisY <= height - (iApron + apron) && iApron < thisX <= width - iApron
-			thisPX::Int32 = thisY + (thisX - 1) * height
-			@inbounds data[threadNum+1] = @inbounds inp[thisPX]
-		end
-	end
-	sync_threads()
-
-	thisIsAComputationThread::Bool =
-		((iApron + apron) < thisY <= height - (iApron + apron)) && ((iApron + apron) < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth - (iApron + apron)) && (apron < threadIdx().y <= blockDim().y - apron) &&
-		((iApron + apron) < thisX <= width - (iApron + apron))
-
-	if thisIsAComputationThread
-		sum::Float32 = 0.0
-		for i in -apron:apron
-			sum += @inbounds data[threadNum+1+i*blockDim().x] * @inbounds conv[apron+1+i]
-		end
-		@inbounds out[thisY, thisX] = sum
-	end
-	return
-end
-
-
-function row_kernel_3(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16, apron::Int8)#, error)
-	# FOR CUDA registers, x is vertical and y is horizontal. So, threadIdx().x is vertical and threadIdx().y is horizontal
-	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-	threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
-	threads::Int16 = blockDim().x * blockDim().y
-
+	# number of blocks in a column and row, and total number of blocks in the image
 	blocksInACol::UInt8 = cld(height, blockDim().x)
 	blocksInARow::UInt16 = cld(imgWidth, blockDim().y - 2 * apron)
 	blocksInAnImage::UInt32 = UInt32(blocksInACol) * UInt32(blocksInARow)
 
+	# This thread's coordinates in the image
 	thisY::Int16 = (blockNum % blocksInACol) * blockDim().x + threadIdx().x # 1-indexed
 	thisX::Int32 = (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2 * apron) + threadIdx().y - apron # 1-indexed
 
@@ -240,6 +68,7 @@ function row_kernel_3(inp, conv, out, height::Int16, width::Int32, imgWidth::Int
 	thisIsAComputationThread::Bool =
 		(0 < thisY <= height) && (0 < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth) && (apron < threadIdx().y <= blockDim().y - apron) && (0 < thisX <= width)
 
+	# convolution
 	if thisIsAComputationThread
 		sum::Float32 = 0.0
 		for i in -apron:apron
@@ -250,6 +79,7 @@ function row_kernel_3(inp, conv, out, height::Int16, width::Int32, imgWidth::Int
 	return
 end
 
+# legacy kernel, no longer used
 function resample_kernel(inp, out)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x - 1
@@ -272,10 +102,6 @@ function resample_kernel(inp, out)
 	end
 	sync_threads()
 
-	# convolution
-	# if threadNum % 100 == 0
-	#     @cuprintln("thisPX: $thisPX, outPX: $outPX, h: $h, w: $w")
-	# end
 	if outPX <= ((h ÷ 2) * (w ÷ 2))
 		out[outPX] = data[threadNum+1]
 	end
@@ -303,21 +129,18 @@ function resample_kernel_2(inp, out, h, w)
 	return
 end
 
+# legacy kernel, no longer used
 function subtract(l1, l0, out, h, w, imgWidth, iApron, norm)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x - 1
 	threads::Int16 = blockDim().x * blockDim().y
 
-	# thisPX::Int32 = blockNum * threads + threadNum + 1 # 1-indexed
-	# thisX::Int32 = (thisPX - 1) ÷ h # 0-indexed
-	# thisY::Int16 = (thisPX - 1) % h # 0-indexed
 	thisAPPX::Int32 = blockNum * threads + threadNum # 0-indexed and indexed in the image without top and bottom aprons
 	thisY::Int16 = iApron + thisAPPX % (h - 2 * iApron)  # 0-indexed
 	thisX::Int32 = iApron + imgWidth * (thisAPPX ÷ ((imgWidth - 2 * iApron) * (h - 2 * iApron))) + (thisAPPX % ((imgWidth - 2 * iApron) * (h - 2 * iApron))) ÷ (h - 2 * iApron) # 0-indexed
 	thisPX::Int32 = thisY + thisX * h + 1 # 1-indexed
 
 	if (0 < thisPX <= h * w)
-		# out[thisPX] = (iApron <= thisY < h - iApron && iApron <= thisX % imgWidth < imgWidth - iApron && 0 < thisPX <= h * w) * (l1[thisPX] - l0[thisPX]) / norm
 		@inbounds out[thisPX] = (@inbounds l1[thisPX] - @inbounds l0[thisPX]) / norm
 	end
 	return
@@ -726,11 +549,13 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 	return
 end
 
+# Kernel to compact the sparse local-extrema image into a list of potential blobs structs
 function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
 	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
 	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
 	laneNum = (threadIdx().x - 1) % 32 # 0-indexed
 
+	# offset for this block
 	shared_count = CuDynamicSharedArray(UInt64, 1)
 
 	if threadIdx().x == 1
@@ -738,37 +563,40 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
 	end
 	sync_threads()
 
+	# calculate the offset for this warp
+
+	# see if this pixel is a local extrema
 	warp_offset::UInt64 = 0
 	is_nonzero = false
 	if threadNum <= h * w
 		is_nonzero = d1[threadNum] >= 0.01
 	end
 	sync_warp()
+	# vote in the warp to generate a mask
 	mask = CUDA.vote_ballot_sync(0xffffffff, is_nonzero)
+	# count the number of non-zero pixels in this warp
 	warp_count::UInt64 = count_ones(mask)
 
+	# leader thread of the warp writes the count to shared memory
 	if laneNum == 0
 		warp_offset = CUDA.atomic_add!(pointer(shared_count, 1), warp_count)
 	end
+	# broadcast this offset to all threads in the warp from the leader thread
 	warp_offset = CUDA.shfl_sync(0xffffffff, warp_offset, 1)
 	sync_threads()
 
+	# find the offset for this block with the total number of non-zero pixels in this block
 	if threadIdx().x == 1
 		shared_count[1] = CUDA.atomic_add!(CUDA.pointer(count, 1), shared_count[1])
 	end
 	sync_threads()
+	# write into the output array using the offset
 	if (ceil(Int, threadNum / 32) * 32 <= h * w) && d1[threadNum] != 0
 		index = shared_count[1] + warp_offset + count_ones(mask & ((1 << laneNum) - 1)) # 0-indexed
 		thisY = (threadNum - 1) % h + 1
 		thisX = ((threadNum - 1) ÷ h) % imgWidth + 1
 		thisImg = ((threadNum - 1) ÷ h) ÷ imgWidth + 1
 		@inbounds xy[index+1] = potential_blob(thisX, thisY, thisImg, ((threadNum - 1) ÷ h) + 1, oct, lay)
-		# @inbounds xy[1+index*6] = thisX
-		# @inbounds xy[2+index*6] = thisY
-		# @inbounds xy[3+index*6] = thisImg
-		# @inbounds xy[4+index*6] = ((threadNum - 1) ÷ h) + 1
-		# @inbounds xy[5+index*6] = oct
-		# @inbounds xy[6+index*6] = lay
 	end
 	return
 end
@@ -785,43 +613,17 @@ function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_c
 
 	r::Int16 = radii[subset]
 
-	l_threadNum = threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1) # 1-indexed  <<<<<<<<< SHOULD I CHANGE THIS TO threadIdx().x + blockDim().x * (threadIdx().y - 1) ?????
-	# l_threadNum = threadIdx().x + blockDim().x * (threadIdx().y - 1) 
+	l_threadNum = threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1) # 1-indexed 
 	data = CuDynamicSharedArray(Float32, (2 * r + 1 + 2 * 1)^2)
-	# data = CuDynamicSharedArray(Float32, (2 * r + 1 + 2 * 1), (2 * r + 1 + 2 * 1))
 	orientation = CuDynamicSharedArray(Float32, bins, sizeof(Float32) * (2 * r + 1 + 2 * 1)^2)
 
 	if l_threadNum <= bins
 		orientation[l_threadNum] = 0.0
 	end
 
-	# if blockIdx().x == 1 && threadIdx().x == 1 && threadIdx().y == 1
-	# 	@cuprintln(length(Os))
-	# end
-
 	octave = cld(subset, 2)
-	# o, h, w, go, ago = let
-	# o, h, w = let
-	# if octave == 1
-	# 	Os[1], Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))#, go1, ago1
-	# elseif octave == 2
-	# 	Os[2], Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))#, go2, ago2
-	# elseif octave == 3
-	# 	Os[3], Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))#, go3, ago3
-	# elseif octave == 4
-	# 	Os[4], Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))#, go4, ago4
-	# end
-	# end
 	o, h, w = Os[octave], Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))
 
-	# a = CUDA.@atomic printcount[octave] += 1
-	# if a == 0
-	# 	@cuprintln("size of o: $(size(o)), octave: $octave, subset: $subset, h: $h, w: $w, r: $r, bins: $bins, l_threadNum: $l_threadNum")
-	# end
-
-
-	# X = pointsXY[4+(blockIdx().x-1)*6] # 1-indexed
-	# Y = pointsXY[2+(blockIdx().x-1)*6] # 1-indexed
 	X = pointsXY[blockIdx().x].x
 	Y = pointsXY[blockIdx().x].y
 
@@ -831,13 +633,8 @@ function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_c
 
 	# load elements around XY from the octave
 	let
-		# thisPX = y + (x - 1) * h # 1-indexed
 		if 0 < x <= w && 0 < y <= h && threadIdx().x <= 2 * radii[subset] + 1 + 2 && threadIdx().y <= 2 * radii[subset] + 1 + 2
-			# data[threadIdx().y, threadIdx().x] = o[y, x]
 			data[l_threadNum] = o[y, x]
-			# if X == 111 && Y == 625
-			#     @cuprintln("x: $x, y: $y, th($(threadIdx().x), $(threadIdx().y)), l_threadNum: $l_threadNum, data[$l_threadNum]: $(data[l_threadNum]*255) o[$y, $x]=$(o[y, x]*255)")
-			# end
 		end
 	end
 	sync_threads()
@@ -847,55 +644,17 @@ function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_c
 			if x == X && y == Y
 				CUDA.@atomic check_count[1] += 1
 			end
+
+			# Calculate the first order derivative through first central difference method
 			dy = data[l_threadNum-1] - data[l_threadNum+1]
 			dx = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
+			# Calculate the gaussian weight and the magnitude of the position and the orientation of the gradient.
 			weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r * 1)^2)) / (2 * pi * (r * 1))
-			# magnitude = sqrt(dy^2 + dx^2) / 4
-			# magnitude = abs(dx * (X - x) - dy * (y - Y)) * sqrt(dy^2 + dx^2) / 4
-			# magnitude = sqrt((x - X)^2 + (y - Y)^2) > 0 ? abs(dx * (X - x) - dy * (y - Y)) * sqrt(dy^2 + dx^2) / (8 * sqrt((x - X)^2 + (y - Y)^2)) : sqrt(dy^2 + dx^2) / 4
 			magnitude = (x - X)^2 + (y - Y)^2 > 0 ? (dx * (X - x) - dy * (Y - y)) / (2 * sqrt((x - X)^2 + (y - Y)^2)) : sqrt(dy^2 + dx^2) / 4
-			# bin::Int32 = fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 # 1-indexed
+			# Calculate the bin number into which the orientation accumulates
 			bin::Int32 = (x - X)^2 + (y - Y)^2 > 0 ? fld((atan((Y - y), (X - x)) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 : fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 # 1-indexed
 
-			# if l_threadNum == 1
-			# end
-			# if l_threadNum==35 &&X == 111 && Y == 625
-			#     for i in 1:((2 * r + 1 + 2 * 1)^2)
-			#         @cuprintln("data[$i]: $(data[i]*255)") 
-			#     end
-			# end
-			# if X == 111 && Y == 625 && (data[l_threadNum-1] != o1[y-1, x] || data[l_threadNum+1] != o1[y+1, x] || data[l_threadNum+(2*r+1+2)] != o1[y, x+1] || data[l_threadNum-(2*r+1+2)] != o1[y, x-1])
-			# 	# @cuprintln("($(1 < x < w) && $(1 < y < h) && $(1 < threadIdx().x <= 2 * radii[subset] + 1 + 1) && $(1 < threadIdx().y <= 2 * radii[subset] + 1 + 1))")
-			# 	@cuprintln(
-			# 		"x: $x, y: $y, dx: $dx = $(data[l_threadNum+(2*r+1+2)]*255) - d[$(l_threadNum-(2*r+1+2))]$(data[l_threadNum-(2*r+1+2)]*255) ($(o1[y, x+1]*255)-$(o1[y, x-1]*255)),\t th($(threadIdx().x), $(threadIdx().y)), l_threadNum: $l_threadNum, ($(threadIdx().x), $(threadIdx().y-1))=>$(threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1-1))vs$(l_threadNum-(2*r+3)), 2r+3=$(2*r+3)"
-			# 	)
-			# end
-			# CUDA.atomic_add!(pointer(orientation, bin), weight * magnitude)
 			CUDA.@atomic orientation[bin] += weight * magnitude
-			# if sqrt(dy^2 + dx^2) > 0
-			# 	@inbounds go[1, y, x] = abs(dy) / sqrt(dy^2 + dx^2)
-			# 	@inbounds go[2, y, x] = abs(dx) / sqrt(dy^2 + dx^2)
-			# 	# @inbounds go[3, y, x] = (subset - 1) % 2
-			# 	@inbounds go[4, y, x] = 1
-
-			# 	@inbounds ago[1, y, x] = (dx * (X - x) + dy * (y - Y)) / sqrt(dy^2 + dx^2)
-			# 	@inbounds ago[2, y, x] = (dx * (X - x) + dy * (y - Y)) / sqrt(dy^2 + dx^2)
-			# 	@inbounds ago[3, y, x] = (dx * (X - x) + dy * (y - Y)) / sqrt(dy^2 + dx^2)
-			# 	if sqrt((x - X)^2 + (y - Y)^2) > 0
-			# 		@inbounds ago[1, y, x] = @inbounds ago[1, y, x] / sqrt((x - X)^2 + (y - Y)^2)
-			# 		@inbounds ago[2, y, x] = @inbounds ago[2, y, x] / sqrt((x - X)^2 + (y - Y)^2)
-			# 		@inbounds ago[3, y, x] = @inbounds ago[3, y, x] / sqrt((x - X)^2 + (y - Y)^2)
-			# 	end
-			# 	@inbounds ago[4, y, x] = 1
-
-			# 	# @inbounds go[1, y*2^(octave-1), x*2^(octave-1)] = abs(dy) / sqrt(dy^2 + dx^2)
-			# 	# @inbounds go[2, y*2^(octave-1), x*2^(octave-1)] = abs(dx) / sqrt(dy^2 + dx^2)
-			# elseif @inbounds go[4, y, x] == 0
-			# 	@inbounds go[1, y, x] = 1
-			# 	@inbounds go[2, y, x] = 1
-			# 	# @inbounds go[3, y, x] = (subset - 1) % 2
-			# 	@inbounds go[4, y, x] = 0.75
-			# end
 		end
 	end
 	sync_threads()
@@ -974,20 +733,10 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
 	if coeff_of_variation < threshold
 		if threadIdx().x <= bins
 			out[(shared_count[1]+thisPoint)*(bins+6)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
-			# if pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 522 && pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 145
-			# 	@cuprintln("orientation[$(threadIdx().x)]: $(shared_orientations[threadIdx().x, threadIdx().y])")# (from $(orientation[threadIdx().x+((blockIdx().x-1)*blockDim().y+threadIdx().y-1)*bins]))")
-			# end
+
 		end
 		sync_threads()
 		if threadIdx().x == 1
-			# @cuprintln("Th($(threadIdx().x), $(threadIdx().y)), blockIdx: ($(blockIdx().x), $(blockIdx().y), blockDim: ($(blockDim().x), $(blockDim().y)), coeff_of_variation: $coeff_of_variation, ($(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]), $(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]))from start:$(threadIdx().y+(blockIdx().x-1)*blockDim().y)")
-			# out[(shared_count[1]+thisPoint)*(bins+6)+1+bins] = Float32(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-			# out[(shared_count[1]+thisPoint)*(bins+6)+2+bins] = Float32(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-			# out[(shared_count[1]+thisPoint)*(bins+6)+3+bins] = Float32(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
-			# out[(shared_count[1]+thisPoint)*(bins+6)+4+bins] = Float32(pointXY[6+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
-			# out[(shared_count[1]+thisPoint)*(bins+6)+5+bins] = Float32(pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-			# out[(shared_count[1]+thisPoint)*(bins+6)+6+bins] = Float32(coeff_of_variation)
-
 			out[(shared_count[1]+thisPoint)*(bins+6)+1+bins] = Float32(2^(pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].oct - 1) * pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].thisX)
 			out[(shared_count[1]+thisPoint)*(bins+6)+2+bins] = Float32(2^(pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].oct - 1) * pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].y)
 			out[(shared_count[1]+thisPoint)*(bins+6)+3+bins] = Float32(pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].oct)
@@ -1000,13 +749,12 @@ function filter_blobs(pointXY, orientations, out, count, outCount, bins, thresho
 	return
 end
 
+# Helper Kernels to plot and debug
 function plot_blobs_f(points, img, h, w, stride, pType = 1)
-	# stride = size(points, 1)
 	X = points[(blockIdx().x-1)*stride+32+5]
 	Y = points[(blockIdx().x-1)*stride+32+2]
 	o = points[(blockIdx().x-1)*stride+32+3]
 	if 0 < X <= w && 0 < Y <= h
-		# img[Integer(o + (Y - 1 + X - 1 * h) * 3)] = 1.0
 		img[1, Integer(Y), Integer(X)] = 1.0
 		img[2, Integer(Y), Integer(X)] = 1.0
 		img[3, Integer(Y), Integer(X)] = 1.0
@@ -1017,7 +765,6 @@ function plot_blobs_f(points, img, h, w, stride, pType = 1)
 end
 
 function plot_blobs_uf(points, img, h, w, stride, pType = 0)
-	# stride = size(points, 1)
 	o = (points[blockIdx().x].oct - 1) % 3 + 1
 	X = points[blockIdx().x].x * 2^(o - 1)
 	Y = points[blockIdx().x].y * 2^(o - 1)
@@ -1027,7 +774,6 @@ function plot_blobs_uf(points, img, h, w, stride, pType = 0)
 		img[Integer(3 + (Y - 1 + (X - 1) * h) * 4)] = 1.0
 		img[Integer(o + (Y - 1 + (X - 1) * h) * 4)] = 0.0
 		img[Integer(4 + (Y - 1 + (X - 1) * h) * 4)] = 1.0
-		# img[Integer(o), Integer(Y), Integer(X)] = 1.0
 	end
 	return
 end
