@@ -1,55 +1,45 @@
-using CUDA
+using CUDA, StaticArrays
 
-# function kernel(a, b, c)
-#     point1, point2 = let
-#         if c == 1
-#             a, b
-#         else
-#             b, a
-#         end
-#     end
-#     point1[2, 2] = 5
-#     point2[2, 2] = 6
-#     return
-# end
-# # d = CuDynamicSharedArray(Float32, 2, sizeof(Float32)*2)
+function test_kernel(A, shmemA)
+    n = threadIdx().x
+    # data = Vector{CuPtr{Float32}}(undef, length(A))
+    data1 = CuDynamicSharedArray(Float64, 5, 5)
+    data = SVector{length(A), CuDeviceVector{Float64, 3}}(data1, data1, data1)
+    @cuprintln("typeof data1: ", typeof(data1))
+    @cuprintln("typeof pointer of data1: ", typeof(pointer(data1)))
+    @cuprintln("typeof shmemA[1] ", typeof(data))
 
-# function kernel2(a)
-#     @assert a == 1 "a should be 1"
-#     c_shared = CuDynamicSharedArray(Float32, 2)
-#     if threadIdx().x == 1
-#         c_shared[1] = 0.0
-#         c_shared[2] = 0.0
-#     end
-#     sync_threads()
+    # shmemA[1] = data1
 
-#     if threadIdx().x % 2 == 0
-#         CUDA.atomic_add!(pointer(c_shared, 1), Float32(1.0))
-#     else
-#         CUDA.atomic_add!(CUDA.pointer(c_shared, 2), Float32(1.0))
-#     end
-#     sync_threads()
-#     return
-# end
-
-function kernel()
-    a1 = 0
-    if threadIdx().x == 1
-        a1 = threadIdx().y
-    end
-    sync_warp()
-    a2 = CUDA.shfl_sync(CUDA.FULL_MASK, a1, 1)
-    @cuprintln("Thread ($(threadIdx().x), $(threadIdx().y)) a = ($a1==>$a2)")
-    return
+    # data1[1] = pointer(data1)
+    # @cuprintln("typeof data[1]: ", typeof(data[1]))
+		# @cuprintln("Matrix $n")
+        # @cuprintln("size of A[n]: ", size(A[n]))
+		# for i in 1:size(A[n],1)
+		# 	for j in 1:size(A[n],2)
+		# 		@cuprint(A[n][i, j], " ")
+		# 	end
+		# 	@cuprintln()
+		# end
+	return
 end
-# define a 2x2 matrix {{1, 2}, {3, 4}}
-# a = CuArray([1 2; 3 4])
-# b = CuArray([1 2; 3 4])
-# @cuda threads = 5 blocks = 1 kernel(a, b, 1)
 
-# println(collect(a))
-# println(collect(b))
+A = Vector{Matrix}()
+push!(A, rand(2, 2))
+push!(A, rand(3, 3))
+push!(A, rand(4, 4))
 
-a = CUDA.zeros(1024)
-@cuda threads = (32, 2) blocks = 1 kernel()
-# println(collect(a))
+for i in eachindex(A)
+	println("Matrix $i")
+	println(A[i])
+end
+
+ptrs = CuArray([pointer(x) for x in A])
+sizes = CuArray([size(x) for x in A])
+
+A_gpu = CuArray(A)
+
+shmemA = CuArray{Core.LLVMPtr{Float64, 3}}(undef, length(A))
+
+@cuda threads = size(A, 1) blocks = 1 shmem=5*5*sizeof(Float64) test_kernel(CuArray([cudaconvert(CuArray(x)) for x in A]), CuArray(shmemA))
+ 

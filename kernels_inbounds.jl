@@ -1,3 +1,4 @@
+
 function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, apron::Int8)
     let
         blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed

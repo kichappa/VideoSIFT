@@ -1,0 +1,6 @@
+[pip.deps]
+opencv-python = ""
+libmamba = ""
+
+[extras]
+channels = ["conda-forge"]

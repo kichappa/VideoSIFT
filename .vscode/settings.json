@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "/home/hice1/kshenoy8/scratch/stereosquad/openMVG_Build/_deps/rerun_sdk-subbuild"
+    "cmake.sourceDirectory": "/home/hice1/kshenoy8/scratch/stereosquad/openMVG_Build/_deps/rerun_sdk-subbuild",
+    "julia.environmentPath": "/storage/home/hcoda1/7/kshenoy8/.julia/environments/languageserver"
 }

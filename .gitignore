@@ -14,6 +14,7 @@ content/*
 opencv/*
 opencv_contrib/*
 CMakeFiles/*
+ffmpeg/*
 
 # nsight files
 .ncu-rep
