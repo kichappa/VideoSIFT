@@ -266,7 +266,6 @@ function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, heig
 
 	# blank_slate is currently a single channel image, we need to convert it to a 4 channel image, with channel as the first dimension
 
-	# println(size(blank_slate))
 	if collect(filtered_count_gpu)[1] >= 1
 		@cuda threads = 1 blocks = collect(filtered_count_gpu)[1] plot_blobs_f(filtered_XY_gpu, blank_slate, height, width, size(filtered_XY_gpu, 1))
 		CUDA.synchronize()
@@ -277,15 +276,12 @@ function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, heig
 	end
 	blank_slate[1:3, :, :] .= reshape(img_gpu, 1, size(img_gpu)...) .* 0.2
 	blank_slate[4, :, :] .= 1.0
-	# blank_slate = Float32.(Gray.(FileIO.load("assets/images/20241203_000635.mp4_frame_1.png")))
-	# println(size(blank_slate))
 	@cuda threads = 1 blocks = count plot_blobs_uf(XY_gpu, blank_slate, height, width, size(XY_gpu, 1), 0)
 	CUDA.synchronize()
 	save("assets/debug/blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
 	if iter == 1
 		save("assets/go/blobs.png", colorview(RGBA, Array(blank_slate)))
 	end
-	# CSV.write("assets/filtered_XY_i.csv", DataFrame(collect(transpose(collect(filtered_XY_gpu))), :auto))
 	println("Size of filtered_XY_gpu: $(size(collect(filtered_XY_gpu)))")
 	return time_taken, count, collect(orientation_gpu), collect(filtered_XY_gpu)[:, 1:collect(filtered_count_gpu)[1]]
 end
