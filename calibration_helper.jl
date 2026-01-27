@@ -718,7 +718,7 @@ function calibrate(
 		save = false,
 		debug = true,
 		num_images = num_images[1],
-		stride = floor(Int, 15*25/30),
+		stride = floor(Int, 10*60/num_images[1]),
 		return_py_intrinsic = true,
 		invert = invert,
 		from_video = from_video,

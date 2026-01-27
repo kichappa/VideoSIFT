@@ -107,14 +107,14 @@ include("calibration_helper.jl")
 # 		refineLM = true,
 # 	)
 
-cam = 23
+cam = 2
 
 ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, properties = 
 	calibrate(
 		"assets/videos/cam",
 		(cam,),
 		(11, 8, 0),
-		16,
+		20,
 		(-1, 1, 0);
 		save = false,
 		debug = true,
@@ -145,4 +145,3 @@ CSV.write("assets/videos/cam/calibration/data_$(cam)_vid.csv", df)
 
 
 print()
-

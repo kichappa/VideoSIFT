@@ -199,7 +199,6 @@ function triangulate_pair(P1, P2, pts1, pts2, T1, T2)
 	V = F.V
 	triangulated_points = V[begin:end-1, 4, :] ./ V[4, 4, :]'
 
-	# Rescale the triangulated points
 	return triangulated_points
 end
 
@@ -224,10 +223,67 @@ function triangulatePoints(points, image_names, cams, datafile)
 		view2 = (view1) % size(points, 3) + 1
 		for i in axes(points, 2)
 			for j in axes(points, 2)
-				distances[i, j, view1] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[:, 1, view1], points[:, j, view2])
+				distances[i, j, view1] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[:, i, view1], points[:, j, view2])
 			end
 		end
 	end
+
+	assignments = []
+	for view in axes(points, 3)
+		assignment, _ = hungarian(distances[:, :, view])
+		push!(assignments, assignment)
+	end
+
+	cumulative_assignments = zeros(Int, size(points, 2), size(points, 3) + 1)
+	cumulative_assignments[:, 1] = 1:size(points, 2)
+	for view in axes(points, 3)
+		cumulative_assignments[:, view+1] = assignments[view][cumulative_assignments[:, view]]
+	end
+	cumulative_assignments = cumulative_assignments[:, begin+1:end]
+
+	matched_points = copy(points)
+	for view in axes(points, 3)
+		matched_points[:, :, view] = points[:, cumulative_assignments[:, view], view]
+	end
+
+	reconstructed_points = zeros(Float32, 3, size(points, 2), size(points, 3))
+
+	reconstructed_points[:, :, begin:end-1] = triangulate_batched(K, R, t, matched_points)
+
+	return distances[begin:end-1], cumulative_assignments[:, begin:end-1], reconstructed_points[:, begin:end-1, :]
+end
+
+function triangulateSubsetPoints(points, image_names, cams, datafile)
+	# points are Vector{Matrix{Float32, 2, n}, views} where n is the number of points in the respective view. n is not the same for all views. 
+	K = []
+	d = []
+	R = []
+	t = []
+	for view in axes(points, 3)
+		K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
+		push!(K, K1)
+		push!(d, d1)
+		push!(R, R1)
+		push!(t, t1)
+	end
+
+	# distances are stored in a 3D array,
+	# each layer (third dimension) i contains the 3D distances between points in view[i] (row) and view[i+1] (column)
+
+	sizes = size.(points, 2)
+	distances = Vector{Matrix{Float32}}(undef, size(points))
+	# distances = zeros(size(points)[[2, 2, 3]])
+	sizes = [maximum([sizes[i], sizes[i % size(a, 1) + 1]]) for i in eachindex(sizes)]
+	for view1 in axes(points, 3)
+		view2 = (view1) % size(points, 3) + 1
+		distances[view1] = zeros(Float32, sizes[view1], sizes[view1])
+		for i in axes(points[view1], 2)
+			for j in axes(points[view2], 2)
+				distances[view1][i, j] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[view1][:, i], points[view2][:, j])
+			end
+		end
+	end
+
 	assignments = []
 	for view in axes(points, 3)
 		assignment, _ = hungarian(distances[:, :, view])

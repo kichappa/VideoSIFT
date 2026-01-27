@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.5
+# v0.20.6
 
 using Markdown
 using InteractiveUtils
@@ -189,25 +189,25 @@ let
 	cam = vcat((-R1' * t1)', (-R2' * t2)')
 	# Compute common axis limits
 	all = vcat(reconstructed_points, cam)
-    xmin, xmax = extrema(all[:, 1])
-    ymin, ymax = extrema(all[:, 2])
-    zmin, zmax = extrema(all[:, 3])
+    xmin, xmax = extrema(all[:, 1]./1000)
+    ymin, ymax = extrema(all[:, 2]./1000)
+    zmin, zmax = extrema(all[:, 3]./1000)
 	range = max(xmax-xmin, ymax-ymin, zmax-zmin)
 	
     
 	trace1 = PlutoPlotly.scatter3d(
-	        x = reconstructed_points[:, 1],
-	        y = reconstructed_points[:, 2],
-	        z = reconstructed_points[:, 3],
+	        x = reconstructed_points[:, 1]./1000,
+	        y = reconstructed_points[:, 2]./1000,
+	        z = reconstructed_points[:, 3]./1000,
 	        mode = "markers",
 	        marker = attr(color = "blue", size = 2),
 	        name = "Reconstructed Points"
 	    )
 
 	trace2 = PlutoPlotly.scatter3d(
-		x = cam[:, 1],
-		y = cam[:, 2],
-		z = cam[:, 3],
+		x = cam[:, 1]./1000,
+		y = cam[:, 2]./1000,
+		z = cam[:, 3]./1000,
 		mode = "markers",
 		marker = attr(color = "red", size = 2),
 		name = "Camera Centres"
@@ -248,69 +248,11 @@ begin
 	# points_homog = CUDA.ones(3, N, M)
 	
 	
-	_, _, reconstructed_points5 = triangulatePoints(a_points, frames5, cameras5, "assets/videos/cam/calibration/data_3_4_3.jld2");
+	_, assignments, reconstructed_points5 = triangulatePoints(a_points, frames5, cameras5, "assets/videos/cam/calibration/data_3_4_3.jld2");
 	# CuArray(Ks[1])
 	
 	# d5, assignments5, reconstructed_points5 = triangulatePoints(a_points, ["MVI_1171_69.png", "DSC_0264_822.png"], "assets/videos/cam/calibration/data_3_4_3.jld2");
 end
-
-# ╔═╡ fd834bd5-7577-43f5-8c35-fd93331bcbb8
-let
-
-	jld_file = "assets/videos/cam/calibration/data_8.jld2"
-	@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
-
-	camera_pos = zeros(3, size(tvecs_arr[1], 2))
-	for i in axes(camera_pos, 2)
-		camera_pos[:, i] = -rvecs_arr[1][i] * tvecs_arr[1][:,i]
-		# camera_pos[:, i] = -tvecs_arr[1][:,i]
-	end
-	set = 1
- #    xmin, xmax = extrema(reconstructed_points5[1, :, set]./1000)
- #    ymin, ymax = extrema(reconstructed_points5[2, :, set]./1000)
- #    zmin, zmax = extrema(reconstructed_points5[3, :, set]./1000)
-	# range = max(xmax-xmin, ymax-ymin, zmax-zmin)
-
-
-	cam = hcat((-R1' * t1), (-R2' * t2))./1000
-	# Compute common axis limits
-	all = hcat(reconstructed_points5[:, :, set]./1000, cam)
-    xmin, xmax = extrema(all[1, :])
-    ymin, ymax = extrema(all[2, :])
-    zmin, zmax = extrema(all[3, :])
-	range = max(xmax-xmin, ymax-ymin, zmax-zmin)
-	
-	trace2 = PlutoPlotly.scatter3d(
-		x = cam[1, :],
-		y = cam[2, :],
-		z = cam[3, :],
-		mode = "markers",
-		marker = attr(color = "red", size = 2),
-		name = "Camera Centres"
-	)
-	
-	trace_points = PlutoPlotly.scatter3d(
-	        x = reconstructed_points5[1, :, set]./1000,
-	        y = reconstructed_points5[2, :, set]./1000,
-	        z = reconstructed_points5[3, :, set]./1000,
-	        mode = "markers",
-	        marker = attr(color = "blue", size = 2),
-	        name = "Triangulation"
-	)
-
-
-	layout = Layout(
-	        title = "New Reconstruction - All camera positions",	
-	        scene = attr(
-		        xaxis = attr(title = "X", range = [(xmin+xmax)/2 - 1.1 * range/2, (xmin+xmax)/2 + 1.1 * range/2]),
-		        yaxis = attr(title = "Y", range = [(ymin+ymax)/2 - 1.1 * range/2, (ymin+ymax)/2 + 1.1 * range/2]),
-		        zaxis = attr(title = "Z", range = [(zmin+zmax)/2 - 1.1 * range/2, (zmin+zmax)/2 + 1.1 * range/2])
-		    )
-	    )
-	plt = Plot([trace_points, trace2], layout)
-	PlutoPlotly.plot(plt)
-end
-	
 
 # ╔═╡ 6255ae9c-504e-4a82-8e8d-4af849cf69d1
 let
@@ -386,19 +328,6 @@ end
 # ╔═╡ ed102db2-4761-4963-ab20-4c207fbe2e22
 reconstructed_points1[:, :, 1]
 
-# ╔═╡ 5214f769-a1fb-427f-85d7-d62d896ae803
-let
-	jld_file = "assets/videos/cam/calibration/data_8.jld2"
-	@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
-
-	camera_pos = zeros(3, size(tvecs_arr[1], 2))
-	for i in axes(camera_pos, 2)
-		camera_pos[:, i] = -rvecs_arr[1][i] * tvecs_arr[1][:,i]
-		# camera_pos[:, i] = -tvecs_arr[1][:,i]
-	end
-	camera_pos
-end
-
 # ╔═╡ 6c0f0a4d-57e0-4387-8c76-479282807bf9
 begin
 	set2 = ["", "_PnP_refine", "_RO_refine"]
@@ -411,6 +340,90 @@ let
 	set2 = ["", "_PnP_refine", "_RO_refine"]
 	names = ["RO", "PnP + refine", "RO + refine"]
 	map(x->Pair(set2[x], names[x]), axes(set2, 1))
+end
+
+# ╔═╡ 951acf1d-07cd-4a36-9613-ccc59b1dace7
+md"Cam: $(@bind cam_num NumberField(1:100, default=27))"
+
+# ╔═╡ 020e4068-2d12-4570-8c5e-6ec9c1b9e0dd
+begin
+	tvecs_arr = let
+		jld_file = "assets/videos/cam/calibration/data_$(cam_num)_vid.jld2"
+		@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
+		tvecs_arr
+	end
+	md"Seekbar: $(@bind cam_frame Slider(5+1:size(tvecs_arr[1], 2)-5, show_value=true))"
+end
+
+# ╔═╡ fd834bd5-7577-43f5-8c35-fd93331bcbb8
+let
+
+	jld_file = "assets/videos/cam/calibration/data_8.jld2"
+	@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
+
+	camera_pos = zeros(3, size(tvecs_arr[1], 2))
+	for i in axes(camera_pos, 2)
+		camera_pos[:, i] = -rvecs_arr[1][i] * tvecs_arr[1][:,i]
+		# camera_pos[:, i] = -tvecs_arr[1][:,i]
+	end
+	set = 1
+ #    xmin, xmax = extrema(reconstructed_points5[1, :, set]./1000)
+ #    ymin, ymax = extrema(reconstructed_points5[2, :, set]./1000)
+ #    zmin, zmax = extrema(reconstructed_points5[3, :, set]./1000)
+	# range = max(xmax-xmin, ymax-ymin, zmax-zmin)
+
+
+	cam = hcat((-R1' * t1), (-R2' * t2))./1000
+	# Compute common axis limits
+	all = hcat(reconstructed_points5[:, :, set]./1000, cam)
+    xmin, xmax = extrema(all[1, :])
+    ymin, ymax = extrema(all[2, :])
+    zmin, zmax = extrema(all[3, :])
+	range = max(xmax-xmin, ymax-ymin, zmax-zmin)
+	
+	trace2 = PlutoPlotly.scatter3d(
+		x = cam[1, :],
+		y = cam[2, :],
+		z = cam[3, :],
+		mode = "markers",
+		marker = attr(color = "red", size = 2),
+		name = "Camera Centres"
+	)
+	
+	trace_points = PlutoPlotly.scatter3d(
+	        x = reconstructed_points5[1, :, set]./1000,
+	        y = reconstructed_points5[2, :, set]./1000,
+	        z = reconstructed_points5[3, :, set]./1000,
+	        mode = "markers",
+	        marker = attr(color = "blue", size = 2),
+	        name = "Triangulation"
+	)
+
+
+	layout = Layout(
+	        title = "New Reconstruction - All camera positions",	
+	        scene = attr(
+		        xaxis = attr(title = "X", range = [(xmin+xmax)/2 - 1.1 * range/2, (xmin+xmax)/2 + 1.1 * range/2]),
+		        yaxis = attr(title = "Y", range = [(ymin+ymax)/2 - 1.1 * range/2, (ymin+ymax)/2 + 1.1 * range/2]),
+		        zaxis = attr(title = "Z", range = [(zmin+zmax)/2 - 1.1 * range/2, (zmin+zmax)/2 + 1.1 * range/2])
+		    )
+	    )
+	plt = Plot([trace_points, trace2], layout)
+	PlutoPlotly.plot(plt)
+end
+	
+
+# ╔═╡ 5214f769-a1fb-427f-85d7-d62d896ae803
+let
+	jld_file = "assets/videos/cam/calibration/data_8.jld2"
+	@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
+
+	camera_pos = zeros(3, size(tvecs_arr[1], 2))
+	for i in axes(camera_pos, 2)
+		camera_pos[:, i] = -rvecs_arr[1][i] * tvecs_arr[1][:,i]
+		# camera_pos[:, i] = -tvecs_arr[1][:,i]
+	end
+	camera_pos
 end
 
 # ╔═╡ 01b1ec84-8e64-46b7-8bd7-92fa48f7a8ed
@@ -452,19 +465,6 @@ let
 	
 	plt = Plot([trace_cam], layout)
 	PlutoPlotly.plot(plt)
-end
-
-# ╔═╡ 951acf1d-07cd-4a36-9613-ccc59b1dace7
-md"Cam: $(@bind cam_num NumberField(1:100))"
-
-# ╔═╡ 020e4068-2d12-4570-8c5e-6ec9c1b9e0dd
-begin
-	tvecs_arr = let
-		jld_file = "assets/videos/cam/calibration/data_$(cam_num)_vid.jld2"
-		@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
-		tvecs_arr
-	end
-	md"Seekbar: $(@bind cam_frame Slider(5+1:size(tvecs_arr[1], 2)-5, show_value=true))"
 end
 
 # ╔═╡ 409faf3c-bd53-4751-8938-cd6eadea0f7f
@@ -545,7 +545,7 @@ end
 # ╔═╡ 59026674-329c-4358-8755-0ff45f92c8da
 # ╠═╡ show_logs = false
 let
-	jld_file = "assets/videos/cam/calibration/data_19_vid.jld2"
+	jld_file = "assets/videos/cam/calibration/data_25_vid.jld2"
 	@unpack ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = jldopen(jld_file)
 
 	camera_pos = zeros(3, size(tvecs_arr[1], 2))
@@ -726,7 +726,7 @@ VideoIO = "~1.1.1"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.4"
+julia_version = "1.11.5"
 manifest_format = "2.0"
 project_hash = "11293ec47b8dfad1a9d821a71e26a0ad3b8d0b30"
 
@@ -2041,7 +2041,7 @@ version = "2.4.0+0"
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.1+4"
+version = "0.8.5+0"
 
 [[deps.OpenSSL]]
 deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
