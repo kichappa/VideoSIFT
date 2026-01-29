@@ -1,9 +1,9 @@
 using Images, FileIO, DelimitedFiles, CSV, DataFrames, Format, VideoIO, Glob
-include("helper.jl")
+include("main.helper.jl")
 include("kernels.jl")
 include("blobs.jl")
 include("header.jl")
-include("calibration_helper.jl")
+include("calibration.helper.jl")
 # include("kernels_inbounds.jl")
 
 fmt = "%.8f"
@@ -15,7 +15,7 @@ let
 	img = []
 	imgWidth = 0
 	time_taken = 0
-	iterations = 1
+	iterations = 5
 
 	# multiple ways to process images. Could be a video file, video stream, or images that will be concatenated.
 

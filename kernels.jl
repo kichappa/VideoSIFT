@@ -1,4 +1,4 @@
-include("helper.jl")
+include("main.helper.jl")
 
 function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, imgWidth::Int16, apron::Int8)
 	let

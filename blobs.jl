@@ -1,4 +1,4 @@
-
+using JLD2, UnPack
 function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1.6, k = -1)
 	if k == -1
 		k = 2^(1 / (scales - 3))
@@ -134,12 +134,14 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 					)
 				end
 				CUDA.synchronize()
-				# save("assets/debug/gaussian_o$(octave)_l$(layer).png", colorview(Gray, collect(out_gpu[octave][layer])))
-				# if octave == 1 && layer == 1
-				# 	save("assets/go/gaussian_o$(octave)_l$(layer).png", colorview(Gray, Array(out_gpu[octave][layer])))
-				# end
+				save("assets/testing/gaussian_o$(octave)_l$(layer).png", colorview(Gray, collect(out_gpu[octave][layer])))
+				if octave == 1 && layer == 1
+					save("assets/go/gaussian_o$(octave)_l$(layer).png", colorview(Gray, Array(out_gpu[octave][layer])))
+				end
 				push!(blobs_input_l, out_gpu[octave][layer])
 				if layer == scales
+					imgs = collect.(out_gpu[octave])
+					jldsave("assets/testing/gaussian_o$(octave).jld2"; imgs)
 					threads_blobs = (32, 1024 ÷ 32)
 					blocks_blobs = (cld(height, threads_blobs[1] - 2), cld(width, threads_blobs[2] - 2))
 					shmem_blobs = threads_blobs[1] * threads_blobs[2] * sizeof(Float32) * 4
@@ -147,7 +149,7 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 					DoG_gpu[octave][1] .= 0
 					CUDA.synchronize()
 					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 32 blobs_2_rewrite(
-						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])),
+						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])), # why cudaconvert?
 						DoG_gpu[octave][2],
 						DoG_gpu[octave][1],
 						height,
@@ -160,6 +162,20 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 						DoGo_gpu[octave][1],
 					)
 					CUDA.synchronize()
+					# collect DoG_gpu[octave] and save it as a JLD2 file
+					DoGo = collect.(DoGo_gpu[octave])
+					minmaxo = collect.(DoG_gpu[octave])
+					# println(hcat(maximum.(DoGo_gpu[octave]), minimum.(DoGo_gpu[octave])))
+					jldsave("assets/testing/DoG_o$(octave).jld2"; DoGo, minmaxo)
+					# println("k=$(format_number(k - 1)) applied for DoG at octave $(octave)")
+					# println("h, w, imw = $(height), $(width), $(imgWidth ÷ (2^(octave - 1)))")
+					save("assets/testing/DoG_o$(octave)_l1.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][1]))))
+					save("assets/testing/DoG_o$(octave)_l2.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][2]))))
+					save("assets/testing/DoG_o$(octave)_l3.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][3]))))
+					save("assets/testing/DoG_o$(octave)_l4.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][4]))))
+
+					save("assets/testing/minmax_DoG_o$(octave)_l1.png", colorview(Gray, collect(normalizeArray(DoG_gpu[octave][1]))))
+					save("assets/testing/minmax_DoG_o$(octave)_l2.png", colorview(Gray, collect(normalizeArray(DoG_gpu[octave][2]))))
 				end
 				accumulative_apron += apron
 				if layer == scales - 2
@@ -321,16 +337,26 @@ function getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0
 			for o in 1:octaves
 				for l in 1:layers
 					check = similar(out_gpu[o][l])
+					check .= 0
 					h, w = size(out_gpu[o][l])
 					@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, out_gpu[o][l], out_gpu_prev[o][l], h, w)
 					# save it into a file
-					# save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+					save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+					println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in out_gpu at octave $(o), layer $(l)")
+					# if prod(size(check)) > sum(collect(check))
+					# 	println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
+					# end
 					if l < layers
 						check = similar(DoG_gpu[o][l])
+						check .= 0
 						h, w = size(DoG_gpu[o][l])
 						@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, DoG_gpu[o][l], DoG_prev_gpu[o][l], h, w)
 						# save it into a file
-						# save("assets/check/check_DoG_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+						save("assets/check/check_DoG_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+						println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in DoG_gpu at octave $(o), layer $(l)")
+					# if prod(size(check)) > sum(collect(check))
+						# 	println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
+						# end
 					end
 				end
 			end
@@ -338,6 +364,7 @@ function getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0
 
 		time_taken_here, count, orientations, blobs = extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth, i)
 		time_taken += time_taken_here
+		println()
 	end
 	return time_taken, count, orientations, blobs, XY_gpu
 end
