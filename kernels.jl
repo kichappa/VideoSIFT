@@ -366,7 +366,8 @@ function blobs_2(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, DoG1)
 end
 
 # Kernel to compact the sparse local-extrema image into a list of potential blobs structs
-function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay)
+# also performs a thresholding operation to remove low-contrast blobs (tau = 0.01)
+function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay, tau)
 	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
 	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
 	laneNum = (threadIdx().x - 1) % 32 # 0-indexed
@@ -385,7 +386,7 @@ function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay)
 	warp_offset::UInt64 = 0
 	is_nonzero = false
 	if threadNum <= h * w
-		is_nonzero = extrema[threadNum] >= 0.01
+		is_nonzero = extrema[threadNum] >= tau
 	end
 	sync_warp()
 	# vote in the warp to generate a mask
@@ -408,7 +409,7 @@ function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay)
 	end
 	sync_threads()
 	# write into the output array using the offset
-	if (ceil(Int, threadNum / 32) * 32 <= h * w) && extrema[threadNum] != 0
+	if (ceil(Int, threadNum / 32) * 32 <= h * w) && extrema[threadNum] >= tau
 		index = shared_count[1] + warp_offset + count_ones(mask & ((1 << laneNum) - 1)) # 0-indexed
 		thisY = (threadNum - 1) % h + 1
 		thisX = ((threadNum - 1) ÷ h) % imgWidth + 1
@@ -444,23 +445,32 @@ function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_c
 	X = pointsXY[blockIdx().x].x
 	Y = pointsXY[blockIdx().x].y
 
-	x = X + threadIdx().y - r - 2 # 1-indexed
-	y = Y + threadIdx().x - r - 2 # 1-indexed
+	x = X + threadIdx().y - r - 2 # 1-indexed, -r-2 is to center [1 -> 2(r+1)+1] to [-(r+1) -> (r+1)]
+	y = Y + threadIdx().x - r - 2 # 1-indexed, -r-2 is to center [1 -> 2(r+1)+1] to [-(r+1) -> (r+1)]
 	sync_threads()
 
 	# load elements around XY from the octave
 	let
-		if 0 < x <= w && 0 < y <= h && threadIdx().x <= 2 * radii[subset] + 1 + 2 && threadIdx().y <= 2 * radii[subset] + 1 + 2
+		if 0 < x <= w && 0 < y <= h && threadIdx().x <= 2 * r + 1 + 2 && threadIdx().y <= 2 * r + 1 + 2
 			data[l_threadNum] = o[y, x]
 		end
 	end
 	sync_threads()
 
+	if x == X && y == Y
+		# if threadIdx().y == 1 && threadIdx().x == 1
+		old = CUDA.@atomic check_count[1] += 1
+		layer = ((subset - 1) % 2) + 1 # 1-indexed
+		if !((1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * r + 1 + 1 && 1 < threadIdx().y <= 2 * r + 1 + 1))
+			@cuprintln("old = $(old) XY($X, $Y), ol=($octave, $layer), h=$(h), w=$(w), ")
+			CUDA.@atomic printcount[1] += 1
+		elseif x==314 && y==1
+			@cuprintln("\told = $(old) XY($X, $Y), ol=($octave, $layer), h=$(h), w=$(w), ")
+			@cuprintln("\t1 < x < w: $(1 < x < w), 1 < y < h: $(1 < y < h), 1 < threadIdx().x <= 2 * r + 1 + 1: $(1 < threadIdx().x <= 2 * r + 1 + 1), 1 < threadIdx().y <= 2 * r + 1 + 1: $(1 < threadIdx().y <= 2 * r + 1 + 1)")
+		end
+	end
 	let
-		if (1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * radii[subset] + 1 + 1 && 1 < threadIdx().y <= 2 * radii[subset] + 1 + 1)# || (-2 < (X - 1231) < 2 && -2 < (Y - 82) < 2)
-			if x == X && y == Y
-				CUDA.@atomic check_count[1] += 1
-			end
+		if (1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * r + 1 + 1 && 1 < threadIdx().y <= 2 * r + 1 + 1)# || (-2 < (X - 1231) < 2 && -2 < (Y - 82) < 2)
 
 			# Calculate the first order derivative through first central difference method
 			dy = data[l_threadNum-1] - data[l_threadNum+1]

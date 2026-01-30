@@ -228,10 +228,10 @@ function extractBlobXYs(
 	height,
 	width,
 	imgWidth,
-	iter,
+	iter;
 	sigma0 = 1.6,
 	k = -1,
-	bins = 32;
+	bins = 32,
 	debug = false,
 )
 	if k == -1
@@ -258,6 +258,7 @@ function extractBlobXYs(
 				count_gpu,
 				octave,
 				layer + 1,
+				0.01,
 			)
 			CUDA.synchronize()
 			push!(counts, Integer(collect(count_gpu)[1]))
@@ -268,8 +269,12 @@ function extractBlobXYs(
 	end
 	if debug
 		println("streams compacted")
+		XY = [[b.thisX, b.y, b.x, b.thisImg, b.oct, b.lay][i] for b in collect(XY_gpu), i in 1:6]
+		CSV.write("assets/debug/XYs_$(iter).csv", DataFrame(XY, :auto))
 	end
 	count = collect(count_gpu)[1]
+	println("counts=$(counts), total=$(counts[end]), count=$(count)")
+	println("radii=$(radii)")
 	counts_gpu = CuArray(counts)
 	radii_gpu = CuArray(radii)
 	threads = ((maximum(radii) * 2 + 1) + 2 * 1, (maximum(radii) * 2 + 1) + 2 * 1)
@@ -285,7 +290,7 @@ function extractBlobXYs(
 
 	check_count = CUDA.zeros(UInt64, 1)
 
-	printcount = CUDA.zeros(UInt64, octaves)
+	printcount = CUDA.zeros(UInt64, 1)
 	time_taken += CUDA.@elapsed @cuda threads = threads blocks = count shmem = (sizeof(Float32) * (((maximum(radii) * 2 + 1) + 2 * 1)^2 + bins)) maxregs = 32 find_orientations(
 		CuArray([cudaconvert(x) for x in out_gpus]),
 		XY_gpu,
@@ -301,9 +306,9 @@ function extractBlobXYs(
 	CUDA.synchronize()
 	if debug
 		println("orientations found")
-		println("check_count: $(collect(check_count)[1])")
+		println("\t\t\tcheck_count: $(collect(check_count)[1]), printcount: $(collect(printcount)[1])")
 		# save orientation_gpu as csv
-		CSV.write("assets/debug/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
+		# CSV.write("assets/debug/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
 		# save gradient_orientations as images
 		for o in 1:octaves
 			save("assets/go/gradient_orientations_o$(o).png", colorview(RGBA, Array(gradient_orientations[o])))
@@ -319,10 +324,10 @@ function extractBlobXYs(
 	time_taken += CUDA.@elapsed @cuda threads = (32, 512 ÷ 32) blocks = cld(count, 512 ÷ 32) shmem = (sizeof(Float32) * 32 * 32 + sizeof(UInt64)) filter_blobs(
 		XY_gpu, orientation_gpu, filtered_XY_gpu, count, filtered_count_gpu, filtered_count_perImg_gpu, bins, imgWidth, 0.6)#0.534) #1.3) 
 	CUDA.synchronize()
-
+	filtered_count = collect(filtered_count_gpu)[1]
 	if debug
 		println("filtering done")
-		println("filtered count: $(collect(filtered_count_gpu)[1]): $(collect(filtered_count_perImg_gpu))")
+		println("filtered count: $(filtered_count): $(collect(filtered_count_perImg_gpu))")
 	end
 	blank_slate = CUDA.zeros(Float32, 4, size(img_gpu)...)
 	blank_slate[1:3, :, :] .= reshape(img_gpu, 1, size(img_gpu)...) .* 0.2
@@ -330,8 +335,8 @@ function extractBlobXYs(
 
 	# blank_slate is currently a single channel image, we need to convert it to a 4 channel image, with channel as the first dimension
 
-	if collect(filtered_count_gpu)[1] >= 1
-		@cuda threads = 1 blocks = collect(filtered_count_gpu)[1] plot_blobs_f(filtered_XY_gpu, blank_slate, height, width, size(filtered_XY_gpu, 1))
+	if filtered_count >= 1
+		@cuda threads = 1 blocks = filtered_count plot_blobs_f(filtered_XY_gpu, blank_slate, height, width, size(filtered_XY_gpu, 1))
 		CUDA.synchronize()
 	end
 
@@ -353,7 +358,7 @@ function extractBlobXYs(
 		end
 		println("Size of filtered_XY_gpu: $(size(collect(filtered_XY_gpu))): $(collect(filtered_count_perImg_gpu))")
 	end
-	return time_taken, count, collect(orientation_gpu), collect(filtered_XY_gpu)[:, 1:collect(filtered_count_gpu)[1]]
+	return time_taken, filtered_count, collect(orientation_gpu), collect(filtered_XY_gpu)[:, 1:filtered_count]
 end
 
 function getBlobs(
@@ -440,7 +445,12 @@ function getBlobs(
 		if 1 < i
 			# compare out_gpu with out_gpu_prev
 			for o in 1:octaves
-				for l in 1:layers-3
+				for l in 1:(layers-2)
+					try
+						println("Val of (314, 1) in extrema[$o][$l]: $(collect(extrema_gpu[o][l])[314, 1])")
+						println("Val of (1, 314) in extrema[$o][$l]: $(collect(extrema_gpu[o][l])[1, 314])")
+					catch
+					end
 					check = similar(DoGo_gpu[o][l])
 					check .= 0
 					h, w = size(DoGo_gpu[o][l])
@@ -453,16 +463,16 @@ function getBlobs(
 					if 0 < sum(collect(check))
 						println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
 					end
-					if l < layers-3
+					if l < layers-2
 						check = similar(extrema_gpu[o][l])
 						check .= 0
 						h, w = size(extrema_gpu[o][l])
 						@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, extrema_gpu[o][l], extrema_gpu_prev[o][l], h, w)
-	
+
 						if debug
 							# save it into a file
 							save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
-							println("Iteration $i: matched $(round((prod(size(check)) - sum(collect(check)))/prod(size(check))*100; digits=2))% pixels in out_gpu at octave $(o), layer $(l)")
+							println("Iteration $i: matched $(round((prod(size(check)) - sum(collect(check)))/prod(size(check))*100; digits=2))% [$(sum(collect(extrema_gpu[o][l] .> 0.01)))] pixels in out_gpu at octave $(o), layer $(l)")
 						end
 						if 0 < sum(collect(check))
 							println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
@@ -486,7 +496,8 @@ function getBlobs(
 			height,
 			width,
 			imgWidth,
-			i,
+			i;
+			debug = true,
 		)
 		# -----------------------------------------------------------------------------------------------------------------------------
 		time_taken += time_taken_here
