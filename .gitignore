@@ -27,7 +27,7 @@ old/assets/blobs/*
 
 
 # nsight files
-.ncu-rep
+*.ncu-rep
 
 # C extensions
 *.so
