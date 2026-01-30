@@ -11,11 +11,11 @@ fmt = "%.8f"
 let
 	println("Here we go!")
 	cameras = 2
-	nImages = 1
+	nImages = 3
 	img = []
 	imgWidth = 0
 	time_taken = 0
-	iterations = 5
+	iterations = 3
 
 	# multiple ways to process images. Could be a video file, video stream, or images that will be concatenated.
 
@@ -65,11 +65,12 @@ let
 	sigma0 = 1.6
 	k = 2^(1 / (layers - 3))
 
-    time_taken, count, orientations, blobs, XY_gpu = getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0, k, iterations, time_taken)
+    time_taken, count, orientations, blobs, XY_gpu, counts = getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0, k, iterations, time_taken)
 	
 	println("Got the blobs...")
 
-	println("count: $count, size of XY_gpu: $(size(XY_gpu))")
+	println("count: $count, size of XY_gpu: $(size(XY_gpu)[1])")
+	println("Counts per iteration: ", counts)
 	XY = [[b.thisX, b.y, b.thisImg, b.x, b.oct, b.lay][i] for b in collect(XY_gpu), i in 1:6]
 	println("Total potential blobs: $count, utilization: $(round(count / size(XY_gpu)[1]*100, digits=2))%")
 	CSV.write("assets/blobs.csv", DataFrame(XY, :auto))

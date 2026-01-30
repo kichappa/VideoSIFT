@@ -1,11 +1,20 @@
 using JLD2, UnPack
-function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1.6, k = -1)
+function getGPUElements(
+	img,
+	height,
+	width,
+	layers,
+	octaves,
+	nImages,
+	sigma0 = 1.6,
+	k = -1,
+)
 	if k == -1
 		k = 2^(1 / (scales - 3))
 	end
 	conv_gpu = []
 	out_gpu = []
-	DoG_gpu = []
+	extrema_gpu = []
 	DoG_prev_gpu = []
 	DoGo_gpu = []
 	XY_gpu = nothing
@@ -15,16 +24,16 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1
 		for layer in 1:layers
 			if layer == 1
 				push!(out_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
-				push!(DoG_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
+				push!(extrema_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				push!(DoG_prev_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				push!(DoGo_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				if octave == 1
-					XY_gpu = CuArray([potential_blob() for i in 1:ceil(Integer, 0.0128 * height * width)])
+					XY_gpu = CuArray([potential_blob() for i in 1:ceil(Integer, 0.0128*height*width/4)])
 				end
 			else
 				push!(out_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 				if layer < layers
-					push!(DoG_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
+					push!(extrema_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 					push!(DoG_prev_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 					push!(DoGo_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 				end
@@ -37,10 +46,25 @@ function getGPUElements(img, height, width, layers, octaves, nImages, sigma0 = 1
 			end
 		end
 	end
-	return CuArray(img), out_gpu, DoG_gpu, conv_gpu, CUDA.zeros(Float32, height, width), XY_gpu, DoGo_gpu, DoG_prev_gpu
+	return CuArray(img), out_gpu, extrema_gpu, conv_gpu, CUDA.zeros(Float32, height, width), XY_gpu, DoGo_gpu, DoG_prev_gpu
 end
 
-function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, height, width, imgWidth, octaves, scales = 5, sigma0 = 1.6, k = -1)
+function gaussianPyramid(
+	img_gpu,
+	out_gpu,
+	extrema_gpu,
+	DoGo_gpu,
+	conv_gpu,
+	buffer,
+	height,
+	width,
+	imgWidth,
+	octaves,
+	scales = 5,
+	sigma0 = 1.6,
+	k = -1,
+	debug = false,
+)
 	if k == -1
 		k = 2^(1 / (scales - 3))
 	end
@@ -107,7 +131,7 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 					else
 						# take the previous octave's third last output, resample it and take it as input
 						apron = 0
-						time_taken += CUDA.@elapsed @cuda threads = 1024 blocks = makeThisNearlySquare(((height * width) ÷ (1024), 1)) resample_kernel_2(out_gpu[octave-1][scales-2], out_gpu[octave][1], height * 2, width * 2)
+						time_taken += CUDA.@elapsed @cuda threads = 1024 blocks = makeThisNearlySquare(((height * width) ÷ (1024), 1)) resample_kernel(out_gpu[octave-1][scales-2], out_gpu[octave][1], height * 2, width * 2)
 						accumulative_apron = resample_apron
 					end
 				else
@@ -134,24 +158,24 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 					)
 				end
 				CUDA.synchronize()
-				save("assets/testing/gaussian_o$(octave)_l$(layer).png", colorview(Gray, collect(out_gpu[octave][layer])))
-				if octave == 1 && layer == 1
-					save("assets/go/gaussian_o$(octave)_l$(layer).png", colorview(Gray, Array(out_gpu[octave][layer])))
+				if debug
+					save("assets/testing/gaussian_o$(octave)_l$(layer).png", colorview(Gray, collect(out_gpu[octave][layer])))
+					if octave == 1 && layer == 1
+						save("assets/go/gaussian_o$(octave)_l$(layer).png", colorview(Gray, Array(out_gpu[octave][layer])))
+					end
 				end
 				push!(blobs_input_l, out_gpu[octave][layer])
 				if layer == scales
-					imgs = collect.(out_gpu[octave])
-					jldsave("assets/testing/gaussian_o$(octave).jld2"; imgs)
 					threads_blobs = (32, 1024 ÷ 32)
 					blocks_blobs = (cld(height, threads_blobs[1] - 2), cld(width, threads_blobs[2] - 2))
 					shmem_blobs = threads_blobs[1] * threads_blobs[2] * sizeof(Float32) * 4
-					DoG_gpu[octave][2] .= 0
-					DoG_gpu[octave][1] .= 0
+					extrema_gpu[octave][2] .= 0
+					extrema_gpu[octave][1] .= 0
 					CUDA.synchronize()
-					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 32 blobs_2_rewrite(
-						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])), # why cudaconvert?
-						DoG_gpu[octave][2],
-						DoG_gpu[octave][1],
+					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 32 blobs_2(
+						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])), # why cudaconvert? CuArray requires inline defined arrays when they are non-primitives
+						extrema_gpu[octave][2],
+						extrema_gpu[octave][1],
 						height,
 						width,
 						imgWidth / 2^(octave - 1),
@@ -162,20 +186,24 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 						DoGo_gpu[octave][1],
 					)
 					CUDA.synchronize()
-					# collect DoG_gpu[octave] and save it as a JLD2 file
-					DoGo = collect.(DoGo_gpu[octave])
-					minmaxo = collect.(DoG_gpu[octave])
-					# println(hcat(maximum.(DoGo_gpu[octave]), minimum.(DoGo_gpu[octave])))
-					jldsave("assets/testing/DoG_o$(octave).jld2"; DoGo, minmaxo)
-					# println("k=$(format_number(k - 1)) applied for DoG at octave $(octave)")
-					# println("h, w, imw = $(height), $(width), $(imgWidth ÷ (2^(octave - 1)))")
-					save("assets/testing/DoG_o$(octave)_l1.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][1]))))
-					save("assets/testing/DoG_o$(octave)_l2.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][2]))))
-					save("assets/testing/DoG_o$(octave)_l3.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][3]))))
-					save("assets/testing/DoG_o$(octave)_l4.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][4]))))
+					if debug
+						# collect extrema_gpu[octave] and save it as a JLD2 file
+						imgs = collect.(out_gpu[octave])
+						jldsave("assets/testing/gaussian_o$(octave).jld2"; imgs)
+						DoGo = collect.(DoGo_gpu[octave])
+						minmaxo = collect.(extrema_gpu[octave])
+						println(hcat(maximum.(DoGo_gpu[octave]), minimum.(DoGo_gpu[octave])))
+						jldsave("assets/testing/DoG_o$(octave).jld2"; DoGo, minmaxo)
+						println("k=$(format_number(k - 1)) applied for DoG at octave $(octave)")
+						println("h, w, imw = $(height), $(width), $(imgWidth ÷ (2^(octave - 1)))")
+						save("assets/testing/DoG_o$(octave)_l1.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][1]))))
+						save("assets/testing/DoG_o$(octave)_l2.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][2]))))
+						save("assets/testing/DoG_o$(octave)_l3.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][3]))))
+						save("assets/testing/DoG_o$(octave)_l4.png", colorview(Gray, collect(normalizeArray(DoGo_gpu[octave][4]))))
 
-					save("assets/testing/minmax_DoG_o$(octave)_l1.png", colorview(Gray, collect(normalizeArray(DoG_gpu[octave][1]))))
-					save("assets/testing/minmax_DoG_o$(octave)_l2.png", colorview(Gray, collect(normalizeArray(DoG_gpu[octave][2]))))
+						save("assets/testing/minmax_DoG_o$(octave)_l1.png", colorview(Gray, collect(normalizeArray(extrema_gpu[octave][1]))))
+						save("assets/testing/minmax_DoG_o$(octave)_l2.png", colorview(Gray, collect(normalizeArray(extrema_gpu[octave][2]))))
+					end
 				end
 				accumulative_apron += apron
 				if layer == scales - 2
@@ -190,8 +218,22 @@ function gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, conv_gpu, buffer, 
 	return time_taken
 end
 
-function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, height, width, imgWidth, iter, sigma0 = 1.6, k = -1, bins = 32)
-	# println("Extracting blobs...")
+function extractBlobXYs(
+	img_gpu,
+	out_gpu,
+	extrema_gpu,
+	XY_gpu,
+	octaves,
+	scales,
+	height,
+	width,
+	imgWidth,
+	iter,
+	sigma0 = 1.6,
+	k = -1,
+	bins = 32,
+	debug = false,
+)
 	if k == -1
 		k = 2^(1 / (scales - 3))
 	end
@@ -204,11 +246,11 @@ function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, heig
 	out_gpus = []
 	for octave in 1:octaves
 		push!(out_gpus, out_gpu[octave][2])
-		for layer in 1:scales-3
+		for layer in 1:(scales-3)
 			threads = 1024
 			blocks = cld(height_local * width_local, threads)
 			time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Int64) * (1 + 32 * 2)) stream_compact(
-				DoG_gpu[octave][layer],
+				extrema_gpu[octave][layer],
 				XY_gpu,
 				height_local,
 				width_local,
@@ -219,13 +261,14 @@ function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, heig
 			)
 			CUDA.synchronize()
 			push!(counts, Integer(collect(count_gpu)[1]))
-			sigma = sigma0 * k^((octave - 1) * 2 + layer)
 			push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer) + 1))
 		end
 		height_local = height_local ÷ 2
 		width_local = width_local ÷ 2
 	end
-	# println("streams compacted")
+	if debug
+		println("streams compacted")
+	end
 	count = collect(count_gpu)[1]
 	counts_gpu = CuArray(counts)
 	radii_gpu = CuArray(radii)
@@ -256,27 +299,31 @@ function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, heig
 		printcount,
 	)
 	CUDA.synchronize()
-	# println("orientations found")
-	# println("check_count: $(collect(check_count)[1])")
-	# save orientation_gpu as csv
-	# CSV.write("assets/debug/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
-	# save gradient_orientations as images
-	# for o in 1:octaves
-	# 	save("assets/go/gradient_orientations_o$(o).png", colorview(RGBA, Array(gradient_orientations[o])))
-	# 	save("assets/go/aligned_go_o$(o).png", colorview(RGBA, map(clamp01nan, Array(aligned_go[o]))))
-	# end
+	if debug
+		println("orientations found")
+		println("check_count: $(collect(check_count)[1])")
+		# save orientation_gpu as csv
+		CSV.write("assets/debug/orientations_i.csv", DataFrame(collect(transpose(collect(orientation_gpu))), :auto))
+		# save gradient_orientations as images
+		for o in 1:octaves
+			save("assets/go/gradient_orientations_o$(o).png", colorview(RGBA, Array(gradient_orientations[o])))
+			save("assets/go/aligned_go_o$(o).png", colorview(RGBA, map(clamp01nan, Array(aligned_go[o]))))
+		end
+	end
 	filtered_XY_gpu = CUDA.zeros(Float32, bins + 6, count)
 	filtered_count_gpu = CuArray{UInt64}([0])
 	filtered_count_perImg_gpu = CUDA.zeros(UInt64, width ÷ imgWidth)
-	# println("count: $count, bins: $bins")
-
+	if debug
+		println("count: $count, bins: $bins")
+	end
 	time_taken += CUDA.@elapsed @cuda threads = (32, 512 ÷ 32) blocks = cld(count, 512 ÷ 32) shmem = (sizeof(Float32) * 32 * 32 + sizeof(UInt64)) filter_blobs(
 		XY_gpu, orientation_gpu, filtered_XY_gpu, count, filtered_count_gpu, filtered_count_perImg_gpu, bins, imgWidth, 0.6)#0.534) #1.3) 
 	CUDA.synchronize()
 
-	# println("filtering done")
-
-	# println("filtered count: $(collect(filtered_count_gpu)[1]): $(collect(filtered_count_perImg_gpu))")
+	if debug
+		println("filtering done")
+		println("filtered count: $(collect(filtered_count_gpu)[1]): $(collect(filtered_count_perImg_gpu))")
+	end
 	blank_slate = CUDA.zeros(Float32, 4, size(img_gpu)...)
 	blank_slate[1:3, :, :] .= reshape(img_gpu, 1, size(img_gpu)...) .* 0.2
 	blank_slate[4, :, :] .= 1.0
@@ -287,51 +334,109 @@ function extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, scales, heig
 		@cuda threads = 1 blocks = collect(filtered_count_gpu)[1] plot_blobs_f(filtered_XY_gpu, blank_slate, height, width, size(filtered_XY_gpu, 1))
 		CUDA.synchronize()
 	end
-	# save("assets/debug/filtered_blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
-	# if iter == 1
-	# 	save("assets/go/filtered_blobs.png", colorview(RGBA, Array(blank_slate)))
-	# end
+
+	if debug
+		println("Plotted filtered blobs")
+		save("assets/debug/filtered_blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
+		if iter == 1
+			save("assets/go/filtered_blobs.png", colorview(RGBA, Array(blank_slate)))
+		end
+	end
 	blank_slate[1:3, :, :] .= reshape(img_gpu, 1, size(img_gpu)...) .* 0.2
 	blank_slate[4, :, :] .= 1.0
 	@cuda threads = 1 blocks = count plot_blobs_uf(XY_gpu, blank_slate, height, width, size(XY_gpu, 1), 0)
 	CUDA.synchronize()
-	# save("assets/debug/blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
-	# if iter == 1
-	# 	save("assets/go/blobs.png", colorview(RGBA, Array(blank_slate)))
-	# end
-	# println("Size of filtered_XY_gpu: $(size(collect(filtered_XY_gpu))): $(collect(filtered_count_perImg_gpu))")
+	if debug
+		save("assets/debug/blobs_$(iter).png", colorview(RGBA, Array(blank_slate)))
+		if iter == 1
+			save("assets/go/blobs.png", colorview(RGBA, Array(blank_slate)))
+		end
+		println("Size of filtered_XY_gpu: $(size(collect(filtered_XY_gpu))): $(collect(filtered_count_perImg_gpu))")
+	end
 	return time_taken, count, collect(orientation_gpu), collect(filtered_XY_gpu)[:, 1:collect(filtered_count_gpu)[1]]
 end
 
-function getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0, k, iterations, time_taken)
-	img_gpu, out_gpu, DoG_gpu, convolution_gpu, buffer, XY_gpu, DoGo_gpu, DoG_prev_gpu = getGPUElements(img, height, width, layers, octaves, nImages, sigma0, k)
+function getBlobs(
+	img,
+	height,
+	width,
+	imgWidth,
+	octaves,
+	layers,
+	nImages,
+	sigma0,
+	k,
+	iterations,
+	time_taken,
+	debug = false,
+)
+	# ----------------------------------------------------------------------------------------------------------------------------------
+	#
+	# Initialize elements on the GPU memory
+	#
+	# ----------------------------------------------------------------------------------------------------------------------------------
+	img_gpu, out_gpu, extrema_gpu, convolution_gpu, buffer, XY_gpu, DoGo_gpu, DoG_prev_gpu = getGPUElements(
+		img,
+		height,
+		width,
+		layers,
+		octaves,
+		nImages,
+		sigma0,
+		k,
+	)
+	# ----------------------------------------------------------------------------------------------------------------------------------
 	# println("Got the GPU elements...")
 	count = nothing
 	orientations = nothing
 	blobs = nothing
+	counts = Int[]
 	for i in 1:iterations
 		for o in 1:octaves
 			for l in 1:layers
 				out_gpu[o][l] .= 0
 				buffer .= 0
 				if l < layers
-					DoG_gpu[o][l] .= 0
+					extrema_gpu[o][l] .= 0
 					DoGo_gpu[o][l] .= 0
 				end
 			end
 		end
-
-		# save the image 
-		# save("assets/debug/base.png", colorview(Gray, collect(img_gpu)))
+		if !debug
+			print("Iteration $i...")
+		end
 
 		# copy out_gpu to another variable
 		out_gpu_prev = copy(out_gpu)
-		DoG_prev_gpu = copy(DoG_gpu)
-		XY_gpu = CuArray([potential_blob() for i in 1:ceil(Integer, 0.0128 * height * width)])
+		DoG_prev_gpu = copy(extrema_gpu)
+		XY_gpu = CuArray([potential_blob() for i in 1:size(XY_gpu, 1)])
 
-		time_taken += gaussianPyramid(img_gpu, out_gpu, DoG_gpu, DoGo_gpu, convolution_gpu, buffer, height, width, imgWidth, octaves, layers, sigma0, k)
+		# -----------------------------------------------------------------------------------------------------------------------------
+		#
+		# create the gaussian pyramid
+		#
+		# -----------------------------------------------------------------------------------------------------------------------------
+		time_taken += gaussianPyramid(
+			img_gpu,
+			out_gpu,
+			extrema_gpu,
+			DoGo_gpu,
+			convolution_gpu,
+			buffer,
+			height,
+			width,
+			imgWidth,
+			octaves,
+			layers,
+			sigma0,
+			k,
+		)
+		# -----------------------------------------------------------------------------------------------------------------------------
 		# println("Found the blobs...")
 		CUDA.synchronize()
+		# -----------------------------------------------------------------------------------------------------------------------------
+		# debug: compare out_gpu with out_gpu_prev
+		# -----------------------------------------------------------------------------------------------------------------------------
 		if 1 < i
 			# compare out_gpu with out_gpu_prev
 			for o in 1:octaves
@@ -340,31 +445,58 @@ function getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0
 					check .= 0
 					h, w = size(out_gpu[o][l])
 					@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, out_gpu[o][l], out_gpu_prev[o][l], h, w)
-					# save it into a file
-					save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
-					println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in out_gpu at octave $(o), layer $(l)")
-					# if prod(size(check)) > sum(collect(check))
-					# 	println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
-					# end
-					if l < layers
-						check = similar(DoG_gpu[o][l])
-						check .= 0
-						h, w = size(DoG_gpu[o][l])
-						@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, DoG_gpu[o][l], DoG_prev_gpu[o][l], h, w)
+
+					if debug
 						# save it into a file
-						save("assets/check/check_DoG_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
-						println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in DoG_gpu at octave $(o), layer $(l)")
-					# if prod(size(check)) > sum(collect(check))
-						# 	println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
-						# end
+						save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+						println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in out_gpu at octave $(o), layer $(l)")
+					end
+					if prod(size(check)) > sum(collect(check))
+						println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
+					end
+					if l < layers
+						check = similar(extrema_gpu[o][l])
+						check .= 0
+						h, w = size(extrema_gpu[o][l])
+						@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, extrema_gpu[o][l], DoG_prev_gpu[o][l], h, w)
+						# save it into a file
+						if debug
+							save("assets/check/check_DoG_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+							println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in DoG_gpu at octave $(o), layer $(l)")
+						end
+						if prod(size(check)) > sum(collect(check))
+							println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
+						end
 					end
 				end
 			end
 		end
-
-		time_taken_here, count, orientations, blobs = extractBlobXYs(img_gpu, out_gpu, DoG_gpu, XY_gpu, octaves, layers, height, width, imgWidth, i)
+		# -----------------------------------------------------------------------------------------------------------------------------
+		#
+		# extract blob XYs after filtering with blob kernel
+		#
+		# -----------------------------------------------------------------------------------------------------------------------------
+		time_taken_here, count, orientations, blobs = extractBlobXYs(
+			img_gpu,
+			out_gpu,
+			extrema_gpu,
+			XY_gpu,
+			octaves,
+			layers,
+			height,
+			width,
+			imgWidth,
+			i,
+		)
+		# -----------------------------------------------------------------------------------------------------------------------------
 		time_taken += time_taken_here
-		println()
+		if debug
+			println()
+		end
+		if !debug
+			print("\e[2K\e[1G")
+		end
+		push!(counts, count)
 	end
-	return time_taken, count, orientations, blobs, XY_gpu
+	return time_taken, count, orientations, blobs, XY_gpu, counts
 end

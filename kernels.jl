@@ -24,7 +24,7 @@ function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, imgWi
 		# convolution
 		if 0 < thisY <= height && 0 < thisX <= width && apron <= threadNum < blockDim().x - apron
 			sum::Float32 = 0.0
-			for i in -apron:apron
+			for i in (-apron):apron
 				sum += @inbounds data[threadNum+1+i] * @inbounds conv[apron+1+i]
 			end
 			@inbounds buffer[thisPX] = sum
@@ -71,7 +71,7 @@ function row_kernel(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16
 	# convolution
 	if thisIsAComputationThread
 		sum::Float32 = 0.0
-		for i in -apron:apron
+		for i in (-apron):apron
 			sum += @inbounds data[threadNum+1+i*blockDim().x] * @inbounds conv[apron+1+i]
 		end
 		@inbounds out[thisY, thisX] = sum
@@ -79,36 +79,7 @@ function row_kernel(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16
 	return
 end
 
-# legacy kernel, no longer used
-function resample_kernel(inp, out)
-	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-	threadNum::UInt16 = threadIdx().x - 1
-	threads::Int16 = blockDim().x
-
-	data = CuDynamicSharedArray(Float32, threads)
-
-	h, w = size(inp)
-	outPX::Int32 = blockNum * threads + threadNum + 1
-	outX::Int32 = (outPX - 1) ÷ (h ÷ 2) # 0-indexed
-	outY::Int16 = (outPX - 1) % (h ÷ 2) # 0-indexed
-
-	thisX::Int32 = 2 * outX # 0-indexed
-	thisY::Int16 = 2 * outY # 0-indexed
-	thisPX::Int32 = thisY + thisX * h + 1
-
-	# fill the shared memory
-	if thisPX <= h * w
-		data[threadNum+1] = inp[thisPX]
-	end
-	sync_threads()
-
-	if outPX <= ((h ÷ 2) * (w ÷ 2))
-		out[outPX] = data[threadNum+1]
-	end
-	return
-end
-
-function resample_kernel_2(inp, out, h, w)
+function resample_kernel(inp, out, h, w)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x - 1
 	threads::Int16 = blockDim().x
@@ -129,23 +100,6 @@ function resample_kernel_2(inp, out, h, w)
 	return
 end
 
-# legacy kernel, no longer used
-function subtract(l1, l0, out, h, w, imgWidth, iApron, norm)
-	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-	threadNum::UInt16 = threadIdx().x - 1
-	threads::Int16 = blockDim().x * blockDim().y
-
-	thisAPPX::Int32 = blockNum * threads + threadNum # 0-indexed and indexed in the image without top and bottom aprons
-	thisY::Int16 = iApron + thisAPPX % (h - 2 * iApron)  # 0-indexed
-	thisX::Int32 = iApron + imgWidth * (thisAPPX ÷ ((imgWidth - 2 * iApron) * (h - 2 * iApron))) + (thisAPPX % ((imgWidth - 2 * iApron) * (h - 2 * iApron))) ÷ (h - 2 * iApron) # 0-indexed
-	thisPX::Int32 = thisY + thisX * h + 1 # 1-indexed
-
-	if (0 < thisPX <= h * w)
-		@inbounds out[thisPX] = (@inbounds l1[thisPX] - @inbounds l0[thisPX]) / norm
-	end
-	return
-end
-
 @inline function max3(a, b, c, val)
 	return val * (max(a, max(b, c)) <= val)
 end
@@ -154,143 +108,7 @@ end
 	return val * (min(a, min(b, c)) >= val)
 end
 
-function blobs(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, ap4, ap5, norm)#, DoG4, DoG3, DoG2, DoG1)
-	threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
-	threads = blockDim().x * blockDim().y
-
-	data1 = CuDynamicSharedArray(Float32, threads)
-	data2 = CuDynamicSharedArray(Float32, threads, sizeof(Float32) * threads)
-	data3 = CuDynamicSharedArray(Float32, threads, 2 * sizeof(Float32) * threads)
-
-	# ground truth
-	# this thread has same x and y throughout the kernel. Blocklocal numbering is img - ap4 (top, bottom and verticals)
-	# when I process extrema in [data1, data2, data3], I need to check if the thread is outside the ap4 + 1 in all directions
-	# when I process extrema in [data2, data3, data4], I need to check if the thread is outside the ap5 + 1 in all directions
-
-	thisY::Int32, thisX::Int32, thisPX::Int32 = let
-		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
-		blocksInACol::Int32 = cld(h - 2 * (ap4 + 1), blockDim().x - 2)
-		blocksInAnImage::Int32 = blocksInACol * cld(imgWidth - 2 * (ap4 + 1), blockDim().y - 2)
-
-		ap4 + (blockNum % blocksInACol) * (blockDim().x - 2) + threadIdx().x - 1, # 0-indexed
-		ap4 + (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y - 1, # 0-indexed
-		ap4 + (blockNum % blocksInACol) * (blockDim().x - 2) + threadIdx().x - 1 + (ap4 + (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y - 1) * h + 1 # 1-indexed
-	end
-
-	let
-		shouldIProcess = (thisY < h - ap4 && thisX % imgWidth < imgWidth - ap4)
-		if (0 < thisPX <= h * w)
-			# data1[threadNum] = shouldIProcess * (l2[thisPX] - l1[thisPX]) / norm
-			# data2[threadNum] = shouldIProcess * (l3[thisPX] - l2[thisPX]) / norm
-			# data3[threadNum] = shouldIProcess * (l4[thisPX] - l3[thisPX]) / norm
-			data1[threadNum] = @inbounds l1[thisY, thisX]
-			# sync_threads()
-			sync_warp()
-			data2[threadNum] = @inbounds l2[thisY, thisX]
-			data1[threadNum] = shouldIProcess * (@inbounds data2[threadNum] - @inbounds data1[threadNum]) / norm
-			# sync_threads()
-			sync_warp()
-			data3[threadNum] = @inbounds l3[thisY, thisX]
-			data2[threadNum] = shouldIProcess * (@inbounds data3[threadNum] - @inbounds data2[threadNum]) / norm
-			# sync_threads()
-			sync_warp()
-			data3[threadNum] = shouldIProcess * (@inbounds l4[thisY, thisX] - @inbounds data3[threadNum]) / norm
-		end
-	end
-	sync_threads()
-
-	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h - ap4 && thisX % imgWidth < imgWidth - ap4)
-		# data 2
-		thisO = max3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data2[threadNum])
-		thisO = max3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
-		thisO = max3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
-
-		# data 3
-		thisO = max3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
-		thisO = max3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
-		thisO = max3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
-
-		# data 1
-		thisO = max3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
-		thisO = max3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
-		thisO = max3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
-
-		if thisO != data2[threadNum]
-			# data 2
-			thisO = min3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data2[threadNum])
-			thisO = min3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
-			thisO = min3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
-
-			# data 3
-			thisO = min3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
-			thisO = min3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
-			thisO = min3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
-
-			# data 1
-			thisO = min3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
-			thisO = min3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
-			thisO = min3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
-		end
-		# @inbounds out1[thisPX] = abs(thisO)
-		@inbounds out1[thisY, thisX] = abs(thisO)
-		# @inbounds DoG1[thisPX] = data1[threadNum]
-		# @inbounds DoG2[thisPX] = data2[threadNum]
-		# @inbounds DoG3[thisPX] = data3[threadNum]
-	end
-	sync_threads()
-
-	shouldIProcess = (ap5 <= thisY < h - ap5 && ap5 <= thisX % imgWidth < imgWidth - ap5)
-	if (0 < thisPX <= h * w)
-		# data1[threadNum] = shouldIProcess * (l4[thisPX] - l3[thisPX]) / norm
-		data1[threadNum] = @inbounds l4[thisY, thisX]
-		sync_warp()
-		# sync_threads()
-		data1[threadNum] = shouldIProcess * (@inbounds l5[thisY, thisX] - data1[threadNum]) / norm
-	end
-	sync_threads()
-
-	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && ap5 <= thisY < h - ap5 && ap5 <= thisX % imgWidth < imgWidth - ap5)
-		# out2
-		# Unrolled loop for x = -1, 0, 1 and y = -1, 0, 1
-		# data 2
-		thisO = max3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data3[threadNum])
-		thisO = max3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
-		thisO = max3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
-
-		# data 3
-		thisO = max3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
-		thisO = max3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
-		thisO = max3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
-
-		# data 1
-		thisO = max3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
-		thisO = max3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
-		thisO = max3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
-
-		if thisO != data3[threadNum]
-			# data 2
-			thisO = min3(data2[threadNum-1-blockDim().x], data2[threadNum-blockDim().x], data2[threadNum+1-blockDim().x], data3[threadNum])
-			thisO = min3(data2[threadNum-1], data2[threadNum], data2[threadNum+1], thisO)
-			thisO = min3(data2[threadNum-1+blockDim().x], data2[threadNum+blockDim().x], data2[threadNum+1+blockDim().x], thisO)
-
-			# data 3
-			thisO = min3(data3[threadNum-1-blockDim().x], data3[threadNum-blockDim().x], data3[threadNum+1-blockDim().x], thisO)
-			thisO = min3(data3[threadNum-1], data3[threadNum], data3[threadNum+1], thisO)
-			thisO = min3(data3[threadNum-1+blockDim().x], data3[threadNum+blockDim().x], data3[threadNum+1+blockDim().x], thisO)
-
-			# data 1
-			thisO = min3(data1[threadNum-1-blockDim().x], data1[threadNum-blockDim().x], data1[threadNum+1-blockDim().x], thisO)
-			thisO = min3(data1[threadNum-1], data1[threadNum], data1[threadNum+1], thisO)
-			thisO = min3(data1[threadNum-1+blockDim().x], data1[threadNum+blockDim().x], data1[threadNum+1+blockDim().x], thisO)
-		end
-		# @inbounds out2[thisPX] = abs(thisO)
-		@inbounds out2[thisY, thisX] = abs(thisO)
-		# @inbounds DoG4[thisPX] = data1[threadNum]
-	end
-	return
-end
-
-function blobs_2(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm)#, DoG4, DoG3, DoG2, DoG1)
+function blobs_1(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm)#, DoG4, DoG3, DoG2, DoG1)
 	threadNum::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x # 1-indexed
 	threads = blockDim().x * blockDim().y
 
@@ -421,8 +239,8 @@ function blobs_2(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm)#, DoG4, D
 	return
 end
 
-# function blobs_2_rewrite(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, DoG1)
-function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, DoG1)
+# function blobs_2(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, DoG1)
+function blobs_2(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, DoG1)
 	tN::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x
 	threads = blockDim().x * blockDim().y
 
@@ -467,10 +285,6 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 	sync_threads()
 
 	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h && thisX % imgWidth < imgWidth)
-		max_layer_2 = 0.0
-		min_layer_2 = 0.0
-		max_layer_3 = 0.0
-		min_layer_3 = 0.0
 		max_layer1 =
 			max(
 				max(
@@ -487,7 +301,7 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 				),
 				min(min(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]),
 			)
-		max_layer2 =
+		max_layer23 =
 			max(
 				max(
 					max(max(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x]),
@@ -495,7 +309,7 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 				),
 				max(max(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]),
 			)
-		min_layer2 =
+		min_layer23 =
 			min(
 				min(
 					min(min(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x]),
@@ -503,23 +317,31 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 				),
 				min(min(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]),
 			)
-		max_layer3 =
-			max(
+		max_layer23 =
+			max(max_layer23,
 				max(
-					max(max(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
-					max(max(data3[tN-1], data3[tN]), data3[tN+1]),
+					max(
+						max(max(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
+						max(max(data3[tN-1], data3[tN]), data3[tN+1]),
+					),
+					max(max(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
 				),
-				max(max(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
 			)
-		min_layer3 =
-			min(
+		min_layer23 =
+			min(min_layer23,
 				min(
-					min(min(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
-					min(min(data3[tN-1], data3[tN]), data3[tN+1]),
+					min(
+						min(min(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
+						min(min(data3[tN-1], data3[tN]), data3[tN+1]),
+					),
+					min(min(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
 				),
-				min(min(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
 			)
-		max_layer4 =
+		if data2[tN] == max(max_layer1, max_layer23) ||
+		   data2[tN] == min(min_layer1, min_layer23)
+			@inbounds out1[thisY, thisX] = abs(data2[tN])
+		end
+		max_layer1 =
 			max(
 				max(
 					max(max(data4[tN-1-blockDim().x], data4[tN-blockDim().x]), data4[tN+1-blockDim().x]),
@@ -527,7 +349,7 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 				),
 				max(max(data4[tN-1+blockDim().x], data4[tN+blockDim().x]), data4[tN+1+blockDim().x]),
 			)
-		min_layer4 =
+		min_layer1 =
 			min(
 				min(
 					min(min(data4[tN-1-blockDim().x], data4[tN-blockDim().x]), data4[tN+1-blockDim().x]),
@@ -535,14 +357,8 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 				),
 				min(min(data4[tN-1+blockDim().x], data4[tN+blockDim().x]), data4[tN+1+blockDim().x]),
 			)
-		max_all = max(max(max_layer1, max_layer2), max_layer3)
-		min_all = min(min(min_layer1, min_layer2), min_layer3)
-		if data2[tN] == max_all || data2[tN] == min_all
-			@inbounds out1[thisY, thisX] = abs(data2[tN])
-		end
-		max_all = max(max(max_layer2, max_layer3), max_layer4)
-		min_all = min(min(min_layer2, min_layer3), min_layer4)
-		if data3[tN] == max_all || data3[tN] == min_all
+		if data3[tN] == max(max_layer1, max_layer23) ||
+		   data3[tN] == min(min_layer1, min_layer23)
 			@inbounds out2[thisY, thisX] = abs(data3[tN])
 		end
 	end
@@ -550,7 +366,7 @@ function blobs_2_rewrite(l, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, 
 end
 
 # Kernel to compact the sparse local-extrema image into a list of potential blobs structs
-function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
+function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay)
 	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
 	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
 	laneNum = (threadIdx().x - 1) % 32 # 0-indexed
@@ -569,7 +385,7 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
 	warp_offset::UInt64 = 0
 	is_nonzero = false
 	if threadNum <= h * w
-		is_nonzero = d1[threadNum] >= 0.01
+		is_nonzero = extrema[threadNum] >= 0.01
 	end
 	sync_warp()
 	# vote in the warp to generate a mask
@@ -577,7 +393,7 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
 	# count the number of non-zero pixels in this warp
 	warp_count::UInt64 = count_ones(mask)
 
-	# leader thread of the warp writes the count to shared memory
+	# warp leader writes the count to the blocks's shared memory
 	if laneNum == 0
 		warp_offset = CUDA.atomic_add!(pointer(shared_count, 1), warp_count)
 	end
@@ -586,12 +402,13 @@ function stream_compact(d1, xy, h, w, imgWidth, count, oct, lay)
 	sync_threads()
 
 	# find the offset for this block with the total number of non-zero pixels in this block
+	# block leader thread writes the count to global memory
 	if threadIdx().x == 1
 		shared_count[1] = CUDA.atomic_add!(CUDA.pointer(count, 1), shared_count[1])
 	end
 	sync_threads()
 	# write into the output array using the offset
-	if (ceil(Int, threadNum / 32) * 32 <= h * w) && d1[threadNum] != 0
+	if (ceil(Int, threadNum / 32) * 32 <= h * w) && extrema[threadNum] != 0
 		index = shared_count[1] + warp_offset + count_ones(mask & ((1 << laneNum) - 1)) # 0-indexed
 		thisY = (threadNum - 1) % h + 1
 		thisX = ((threadNum - 1) ÷ h) % imgWidth + 1
