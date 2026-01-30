@@ -23,12 +23,12 @@ let
 	# for views in 1:cameras
 	# 	v[views] = VideoIO.openvideo("assets/videos/view$(views).mp4")
 	# end
-	
+
 	v = []
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam1/DSC_0048.JPG"))))
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam2/DSC_0083.JPG"))))
 
-	
+
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam3/MVI_1171_11.png"))))
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam3/MVI_1171_69.png"))))
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam4/DSC_0264_493.png"))))
@@ -47,7 +47,7 @@ let
 
 	# load the images
 	for i in 1:cameras
-		img_temp = v[i]	
+		img_temp = v[i]
 		if i == 1
 			img = img_temp
 			imgWidth = size(img, 2)
@@ -65,8 +65,21 @@ let
 	sigma0 = 1.6
 	k = 2^(1 / (layers - 3))
 
-    time_taken, count, orientations, blobs, XY_gpu, counts = getBlobs(img, height, width, imgWidth, octaves, layers, nImages, sigma0, k, iterations, time_taken)
-	
+	time_taken, count, orientations, blobs, XY_gpu, counts = getBlobs(
+		img,
+		height,
+		width,
+		imgWidth,
+		octaves,
+		layers,
+		nImages,
+		sigma0,
+		k,
+		iterations,
+		time_taken;
+		debug=false,
+	)
+
 	println("Got the blobs...")
 
 	println("count: $count, size of XY_gpu: $(size(XY_gpu)[1])")

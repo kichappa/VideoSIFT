@@ -628,10 +628,10 @@ function check_equal(out, img1, img2, h, w)
 	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
 	if threadNum <= h * w
 		if img1[threadNum] != img2[threadNum]
-			out[threadNum] = 0.0
+			out[threadNum] = 1.0
 			@cuprintln("$(threadNum): $(img1[threadNum]) != $(img2[threadNum])")
 		else
-			out[threadNum] = 1.0
+			out[threadNum] = 0.0
 		end
 	end
 	return

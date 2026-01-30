@@ -15,7 +15,7 @@ function getGPUElements(
 	conv_gpu = []
 	out_gpu = []
 	extrema_gpu = []
-	DoG_prev_gpu = []
+	DoGo_gpu_prev = []
 	DoGo_gpu = []
 	XY_gpu = nothing
 	for octave in 1:octaves
@@ -25,7 +25,7 @@ function getGPUElements(
 			if layer == 1
 				push!(out_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				push!(extrema_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
-				push!(DoG_prev_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
+				push!(DoGo_gpu_prev, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				push!(DoGo_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				if octave == 1
 					XY_gpu = CuArray([potential_blob() for i in 1:ceil(Integer, 0.0128*height*width/4)])
@@ -34,7 +34,7 @@ function getGPUElements(
 				push!(out_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 				if layer < layers
 					push!(extrema_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
-					push!(DoG_prev_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
+					push!(DoGo_gpu_prev[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 					push!(DoGo_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))
 				end
 			end
@@ -46,7 +46,7 @@ function getGPUElements(
 			end
 		end
 	end
-	return CuArray(img), out_gpu, extrema_gpu, conv_gpu, CUDA.zeros(Float32, height, width), XY_gpu, DoGo_gpu, DoG_prev_gpu
+	return CuArray(img), out_gpu, extrema_gpu, conv_gpu, CUDA.zeros(Float32, height, width), XY_gpu, DoGo_gpu, DoGo_gpu_prev
 end
 
 function gaussianPyramid(
@@ -62,7 +62,7 @@ function gaussianPyramid(
 	octaves,
 	scales = 5,
 	sigma0 = 1.6,
-	k = -1,
+	k = -1;
 	debug = false,
 )
 	if k == -1
@@ -231,7 +231,7 @@ function extractBlobXYs(
 	iter,
 	sigma0 = 1.6,
 	k = -1,
-	bins = 32,
+	bins = 32;
 	debug = false,
 )
 	if k == -1
@@ -367,7 +367,7 @@ function getBlobs(
 	sigma0,
 	k,
 	iterations,
-	time_taken,
+	time_taken;
 	debug = false,
 )
 	# ----------------------------------------------------------------------------------------------------------------------------------
@@ -375,7 +375,7 @@ function getBlobs(
 	# Initialize elements on the GPU memory
 	#
 	# ----------------------------------------------------------------------------------------------------------------------------------
-	img_gpu, out_gpu, extrema_gpu, convolution_gpu, buffer, XY_gpu, DoGo_gpu, DoG_prev_gpu = getGPUElements(
+	img_gpu, out_gpu, extrema_gpu, convolution_gpu, buffer, XY_gpu, DoGo_gpu, DoGo_gpu_prev = getGPUElements(
 		img,
 		height,
 		width,
@@ -407,8 +407,8 @@ function getBlobs(
 		end
 
 		# copy out_gpu to another variable
-		out_gpu_prev = copy(out_gpu)
-		DoG_prev_gpu = copy(extrema_gpu)
+		extrema_gpu_prev = copy(extrema_gpu)
+		DoGo_gpu_prev = copy(DoGo_gpu)
 		XY_gpu = CuArray([potential_blob() for i in 1:size(XY_gpu, 1)])
 
 		# -----------------------------------------------------------------------------------------------------------------------------
@@ -440,31 +440,31 @@ function getBlobs(
 		if 1 < i
 			# compare out_gpu with out_gpu_prev
 			for o in 1:octaves
-				for l in 1:layers
-					check = similar(out_gpu[o][l])
+				for l in 1:layers-3
+					check = similar(DoGo_gpu[o][l])
 					check .= 0
-					h, w = size(out_gpu[o][l])
-					@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, out_gpu[o][l], out_gpu_prev[o][l], h, w)
-
+					h, w = size(DoGo_gpu[o][l])
+					@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, DoGo_gpu[o][l], DoGo_gpu_prev[o][l], h, w)
+					# save it into a file
 					if debug
-						# save it into a file
-						save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
-						println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in out_gpu at octave $(o), layer $(l)")
+						save("assets/check/check_DoG_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+						println("Iteration $i: matched $(round((prod(size(check)) - sum(collect(check)))/prod(size(check))*100; digits=2))% pixels in DoG_gpu at octave $(o), layer $(l)")
 					end
-					if prod(size(check)) > sum(collect(check))
+					if 0 < sum(collect(check))
 						println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
 					end
-					if l < layers
+					if l < layers-3
 						check = similar(extrema_gpu[o][l])
 						check .= 0
 						h, w = size(extrema_gpu[o][l])
-						@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, extrema_gpu[o][l], DoG_prev_gpu[o][l], h, w)
-						# save it into a file
+						@cuda threads = 1024 blocks = cld(h * w, 1024) check_equal(check, extrema_gpu[o][l], extrema_gpu_prev[o][l], h, w)
+	
 						if debug
-							save("assets/check/check_DoG_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
-							println("Iteration $i: matched $(round(sum(collect(check))/prod(size(check))*100; digits=2))% pixels in DoG_gpu at octave $(o), layer $(l)")
+							# save it into a file
+							save("assets/check/check_o$(o)_l$(l)_i$(i).png", colorview(Gray, collect(check)))
+							println("Iteration $i: matched $(round((prod(size(check)) - sum(collect(check)))/prod(size(check))*100; digits=2))% pixels in out_gpu at octave $(o), layer $(l)")
 						end
-						if prod(size(check)) > sum(collect(check))
+						if 0 < sum(collect(check))
 							println("Difference found in out_gpu at octave $(o), layer $(l), iteration $(i)")
 						end
 					end
