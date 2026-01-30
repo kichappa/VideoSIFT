@@ -457,20 +457,11 @@ function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_c
 	end
 	sync_threads()
 
-	if x == X && y == Y
-		# if threadIdx().y == 1 && threadIdx().x == 1
-		old = CUDA.@atomic check_count[1] += 1
-		layer = ((subset - 1) % 2) + 1 # 1-indexed
-		if !((1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * r + 1 + 1 && 1 < threadIdx().y <= 2 * r + 1 + 1))
-			@cuprintln("old = $(old) XY($X, $Y), ol=($octave, $layer), h=$(h), w=$(w), ")
-			CUDA.@atomic printcount[1] += 1
-		elseif x==314 && y==1
-			@cuprintln("\told = $(old) XY($X, $Y), ol=($octave, $layer), h=$(h), w=$(w), ")
-			@cuprintln("\t1 < x < w: $(1 < x < w), 1 < y < h: $(1 < y < h), 1 < threadIdx().x <= 2 * r + 1 + 1: $(1 < threadIdx().x <= 2 * r + 1 + 1), 1 < threadIdx().y <= 2 * r + 1 + 1: $(1 < threadIdx().y <= 2 * r + 1 + 1)")
-		end
-	end
 	let
 		if (1 < x < w && 1 < y < h && 1 < threadIdx().x <= 2 * r + 1 + 1 && 1 < threadIdx().y <= 2 * r + 1 + 1)# || (-2 < (X - 1231) < 2 && -2 < (Y - 82) < 2)
+			if x == X && y == Y
+				old = CUDA.@atomic check_count[1] += 1
+			end
 
 			# Calculate the first order derivative through first central difference method
 			dy = data[l_threadNum-1] - data[l_threadNum+1]
