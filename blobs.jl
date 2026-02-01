@@ -166,24 +166,25 @@ function gaussianPyramid(
 				end
 				push!(blobs_input_l, out_gpu[octave][layer])
 				if layer == scales
-					threads_blobs = (32, 1024 ÷ 32)
+					threads_blobs = (32, 512 ÷ 32)
 					blocks_blobs = (cld(height, threads_blobs[1] - 2), cld(width, threads_blobs[2] - 2))
-					shmem_blobs = threads_blobs[1] * threads_blobs[2] * sizeof(Float32) * 4
+					shmem_blobs = threads_blobs[1] * threads_blobs[2] * sizeof(Float32) * 3
 					extrema_gpu[octave][2] .= 0
 					extrema_gpu[octave][1] .= 0
 					CUDA.synchronize()
-					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 32 blobs_2(
+					# CUDA.@profile trace=true @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 32 blobs_2(
+					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 64 blobs_2(
 						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])), # why cudaconvert? CuArray requires inline defined arrays when they are non-primitives
 						extrema_gpu[octave][2],
 						extrema_gpu[octave][1],
-						height,
-						width,
-						imgWidth / 2^(octave - 1),
-						k - 1,
-						DoGo_gpu[octave][4],
-						DoGo_gpu[octave][3],
-						DoGo_gpu[octave][2],
-						DoGo_gpu[octave][1],
+						Int32(height),
+						Int32(width),
+						Int32(imgWidth / 2^(octave - 1)),
+						Float32(k - 1),
+						# DoGo_gpu[octave][4],
+						# DoGo_gpu[octave][3],
+						# DoGo_gpu[octave][2],
+						# DoGo_gpu[octave][1],
 					)
 					CUDA.synchronize()
 					if debug
@@ -267,14 +268,14 @@ function extractBlobXYs(
 		height_local = height_local ÷ 2
 		width_local = width_local ÷ 2
 	end
+	count = collect(count_gpu)[1]
 	if debug
 		println("streams compacted")
 		XY = [[b.thisX, b.y, b.x, b.thisImg, b.oct, b.lay][i] for b in collect(XY_gpu), i in 1:6]
 		CSV.write("assets/debug/XYs_$(iter).csv", DataFrame(XY, :auto))
+		println("counts=$(counts), total=$(counts[end]), count=$(count)")
+		println("radii=$(radii)")
 	end
-	count = collect(count_gpu)[1]
-	println("counts=$(counts), total=$(counts[end]), count=$(count)")
-	println("radii=$(radii)")
 	counts_gpu = CuArray(counts)
 	radii_gpu = CuArray(radii)
 	threads = ((maximum(radii) * 2 + 1) + 2 * 1, (maximum(radii) * 2 + 1) + 2 * 1)
@@ -446,11 +447,6 @@ function getBlobs(
 			# compare out_gpu with out_gpu_prev
 			for o in 1:octaves
 				for l in 1:(layers-2)
-					try
-						println("Val of (314, 1) in extrema[$o][$l]: $(collect(extrema_gpu[o][l])[314, 1])")
-						println("Val of (1, 314) in extrema[$o][$l]: $(collect(extrema_gpu[o][l])[1, 314])")
-					catch
-					end
 					check = similar(DoGo_gpu[o][l])
 					check .= 0
 					h, w = size(DoGo_gpu[o][l])
@@ -497,7 +493,7 @@ function getBlobs(
 			width,
 			imgWidth,
 			i;
-			debug = true,
+			debug = false,
 		)
 		# -----------------------------------------------------------------------------------------------------------------------------
 		time_taken += time_taken_here

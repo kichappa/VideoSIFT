@@ -15,7 +15,7 @@ let
 	img = []
 	imgWidth = 0
 	time_taken = 0
-	iterations = 10
+	iterations = 1
 
 	# multiple ways to process images. Could be a video file, video stream, or images that will be concatenated.
 
