@@ -76,7 +76,7 @@ function gaussianPyramid(
 	for octave in 1:octaves
 		blobs_input_l = []
 		for layer in 1:scales
-			threads_column = 1024 #32 * 32
+			threads_column = 256 # 256(3.38ms), 768(3.55ms), 128(3.58ms), 512(3.67ms), 96(3.79ms), 1024(5.65ms) 
 			threads_row = (32, 384 ÷ 32) # 384(7.74ms) and 768(7.98ms) seem to work the best, then 512(9.96ms), 256(9.98ms) and finally 1024(11.25ms). Values in brackets are total runtime of all row kernels, all octaves (5o, 5l).
 
 			if layer == 1
@@ -90,7 +90,6 @@ function gaussianPyramid(
 			while threads_row[2] - 2 * apron <= 0 && threads_row[1] > 4
 				threads_row = (threads_row[1] ÷ 2, threads_row[2] * 2)
 			end
-			println(threads_row)
 
 			if cld(height, prod(threads_column)) >= 1
 				blocks_column = makeThisNearlySquare((
