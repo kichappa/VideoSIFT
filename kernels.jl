@@ -42,7 +42,7 @@ function row_kernel(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16
 	threads::Int16 = blockDim().x * blockDim().y
 
 	# number of blocks in a column and row, and total number of blocks in the image
-	blocksInACol::UInt8 = cld(height, blockDim().x)
+	blocksInACol::UInt16 = cld(height, blockDim().x)
 	blocksInARow::UInt16 = cld(imgWidth, blockDim().y - 2 * apron)
 	blocksInAnImage::UInt32 = UInt32(blocksInACol) * UInt32(blocksInARow)
 
@@ -386,13 +386,15 @@ end
 
 # Kernel to compact the sparse local-extrema image into a list of potential blobs structs
 # also performs a thresholding operation to remove low-contrast blobs (tau = 0.01)
-function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay, tau)
-	threadNum = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
-	warpNum = (threadIdx().x - 1) ÷ 32 # 0-indexed
-	laneNum = (threadIdx().x - 1) % 32 # 0-indexed
+function stream_compact(extrema, xy, h::UInt32, w::UInt32, imgWidth::UInt16, count, oct::UInt32, lay::UInt32, tau::Float32)
+	threadNum::UInt32 = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
+	#                 (threadIdx().x - 1) ÷ 32 
+	warpNum::UInt32 = (threadIdx().x - 1) >> 5 # 0-indexed
+	#                 (threadIdx().x - 1) % 32 
+	laneNum::UInt32 = (threadIdx().x - 1) & 0x1f # 0-indexed
 
 	# offset for this block
-	shared_count = CuDynamicSharedArray(UInt64, 1)
+	shared_count = CuDynamicSharedArray(UInt32, 1)
 
 	if threadIdx().x == 1
 		shared_count[1] = 0
@@ -402,7 +404,7 @@ function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay, tau)
 	# calculate the offset for this warp
 
 	# see if this pixel is a local extrema
-	warp_offset::UInt64 = 0
+	warp_offset::UInt32 = 0
 	is_nonzero = false
 	if threadNum <= h * w
 		is_nonzero = extrema[threadNum] >= tau
@@ -411,7 +413,7 @@ function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay, tau)
 	# vote in the warp to generate a mask
 	mask = CUDA.vote_ballot_sync(0xffffffff, is_nonzero)
 	# count the number of non-zero pixels in this warp
-	warp_count::UInt64 = count_ones(mask)
+	warp_count::UInt32 = count_ones(mask)
 
 	# warp leader writes the count to the blocks's shared memory
 	if laneNum == 0
@@ -428,11 +430,13 @@ function stream_compact(extrema, xy, h, w, imgWidth, count, oct, lay, tau)
 	end
 	sync_threads()
 	# write into the output array using the offset
-	if (ceil(Int, threadNum / 32) * 32 <= h * w) && extrema[threadNum] >= tau
-		index = shared_count[1] + warp_offset + count_ones(mask & ((1 << laneNum) - 1)) # 0-indexed
-		thisY = (threadNum - 1) % h + 1
-		thisX = ((threadNum - 1) ÷ h) % imgWidth + 1
-		thisImg = ((threadNum - 1) ÷ h) ÷ imgWidth + 1
+	#    (ceil(Int, threadNum / 32) * 32 <= h * w)  ---> WHY? Why not just threadNum <= h * w?
+	# if ((threadNum + 31) & ~UInt32(0x1f) <= h * w) && extrema[threadNum] >= tau
+	if is_nonzero
+		index::UInt32 = shared_count[1] + warp_offset + count_ones(mask & ((1 << laneNum) - 1)) # 0-indexed
+		thisY::UInt32 = rem(threadNum - 1, h) + 1 # (threadNum - 1) % h + 1
+		thisX::UInt32 = rem(div(threadNum - 1, h), imgWidth) + 1 # ((threadNum - 1) ÷ h) % imgWidth + 1
+		thisImg::UInt32 = div(div(threadNum - 1, h), imgWidth) + 1 # ((threadNum - 1) ÷ h) ÷ imgWidth + 1
 		@inbounds xy[index+1] = potential_blob(thisX, thisY, thisImg, ((threadNum - 1) ÷ h) + 1, oct, lay)
 	end
 	return

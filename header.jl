@@ -1,10 +1,10 @@
 struct potential_blob
-	thisX::Int64 # 1
-	y::Int32 # 2
-	thisImg::Int32 # 3
-	x::Int64 # 4
-	oct::Int32 # 5
-	lay::Int32 # 6
+	thisX::UInt32 # 1
+	y::UInt32 # 2
+	thisImg::UInt32 # 3
+	x::UInt32 # 4
+	oct::UInt32 # 5
+	lay::UInt32 # 6
 end
 
 potential_blob() = potential_blob(0, 0, 0, 0, 0, 0)

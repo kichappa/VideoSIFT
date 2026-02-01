@@ -77,7 +77,7 @@ function gaussianPyramid(
 		blobs_input_l = []
 		for layer in 1:scales
 			threads_column = 1024 #32 * 32
-			threads_row = (32, 1024 ÷ 32)
+			threads_row = (32, 384 ÷ 32) # 384(7.74ms) and 768(7.98ms) seem to work the best, then 512(9.96ms), 256(9.98ms) and finally 1024(11.25ms). Values in brackets are total runtime of all row kernels, all octaves (5o, 5l).
 
 			if layer == 1
 				sigma = sigma0 * k^(layer - 1)
@@ -90,6 +90,7 @@ function gaussianPyramid(
 			while threads_row[2] - 2 * apron <= 0 && threads_row[1] > 4
 				threads_row = (threads_row[1] ÷ 2, threads_row[2] * 2)
 			end
+			println(threads_row)
 
 			if cld(height, prod(threads_column)) >= 1
 				blocks_column = makeThisNearlySquare((
@@ -239,7 +240,7 @@ function extractBlobXYs(
 		k = 2^(1 / (scales - 3))
 	end
 	time_taken = 0
-	count_gpu = CuArray{UInt64}([0])
+	count_gpu = CuArray{UInt32}([0])
 	counts = Int[]
 	radii = Int[]
 	height_local = height
@@ -248,18 +249,18 @@ function extractBlobXYs(
 	for octave in 1:octaves
 		push!(out_gpus, out_gpu[octave][2])
 		for layer in 1:(scales-3)
-			threads = 1024
+			threads = 768
 			blocks = cld(height_local * width_local, threads)
 			time_taken += CUDA.@elapsed @cuda threads = threads blocks = blocks shmem = (sizeof(Int64) * (1 + 32 * 2)) stream_compact(
 				extrema_gpu[octave][layer],
 				XY_gpu,
-				height_local,
-				width_local,
-				Int16(imgWidth / 2^(octave - 1)),
+				UInt32(height_local),
+				UInt32(width_local),
+				UInt16(imgWidth / 2^(octave - 1)),
 				count_gpu,
-				octave,
-				layer + 1,
-				0.01,
+				UInt32(octave),
+				UInt32(layer + 1),
+				0.01f0,
 			)
 			CUDA.synchronize()
 			push!(counts, Integer(collect(count_gpu)[1]))
