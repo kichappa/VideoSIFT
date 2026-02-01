@@ -239,7 +239,6 @@ function blobs_1(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm)#, DoG4, D
 	return
 end
 
-# function blobs_2(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm, DoG4, DoG3, DoG2, DoG1)
 function blobs_2(l, out2, out1, h::Int32, w::Int32, imgWidth::Int32, norm::Float32)#, DoG4, DoG3, DoG2, DoG1)
 	tN::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x
 	threads = blockDim().x * blockDim().y
@@ -247,12 +246,12 @@ function blobs_2(l, out2, out1, h::Int32, w::Int32, imgWidth::Int32, norm::Float
 	data1 = CuDynamicSharedArray(Float32, threads)
 	data2 = CuDynamicSharedArray(Float32, threads, 1 * sizeof(Float32) * threads)
 	data3 = CuDynamicSharedArray(Float32, threads, 2 * sizeof(Float32) * threads)
-	# data4 = CuDynamicSharedArray(Float32, threads, 3 * sizeof(Float32) * threads)
+	data4 = CuDynamicSharedArray(Float32, threads, 3 * sizeof(Float32) * threads)
 
 	data1[tN] = 0.0f0
 	data2[tN] = 0.0f0
 	data3[tN] = 0.0f0
-	# data4[tN] = 0.0f0
+	data4[tN] = 0.0f0
 	sync_threads()
 
 	thisY::Int32, thisX::Int32 = let
@@ -264,186 +263,123 @@ function blobs_2(l, out2, out1, h::Int32, w::Int32, imgWidth::Int32, norm::Float
 		(blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2) + threadIdx().y # 0-indexed
 	end
 
-	# shouldIProcess = (thisY < h && thisX % imgWidth < imgWidth)
-	# if (0 < thisPX <= h * w)
 	if (0 < thisY <= h && 0 <= thisX % imgWidth < imgWidth && 0 < thisX <= w)
-		# @cuprintln("t($(threadIdx().x),$(threadIdx().y)) b($(blockIdx().x),$(blockIdx().y)), ($thisY,$thisX)")
-		# data1[tN] = @inbounds l[1][thisY, thisX]
 		data2[tN] = @inbounds l[2][thisY, thisX]
 		data1[tN] = (@inbounds data2[tN] - @inbounds l[1][thisY, thisX]) / norm
 		data3[tN] = @inbounds l[3][thisY, thisX]
 		data2[tN] = (@inbounds data3[tN] - @inbounds data2[tN]) / norm
-		data3[tN] = (@inbounds l[4][thisY, thisX] - @inbounds data3[tN]) / norm
-		# data4[tN] = @inbounds l[4][thisY, thisX]
-		# data3[tN] = (@inbounds data4[tN] - @inbounds data3[tN]) / norm
-		# data4[tN] = (@inbounds l[5][thisY, thisX] - @inbounds data4[tN]) / norm
-		# DoG1[thisY, thisX] = data1[tN]
-		# DoG2[thisY, thisX] = data2[tN]
-		# DoG3[thisY, thisX] = data3[tN]
-		# DoG4[thisY, thisX] = data4[tN]
+		data4[tN] = @inbounds l[4][thisY, thisX]
+		data3[tN] = (@inbounds data4[tN] - @inbounds data3[tN]) / norm
+		data4[tN] = (@inbounds l[5][thisY, thisX] - @inbounds data4[tN]) / norm
 	end
 	sync_threads()
 
 	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h && thisX % imgWidth < imgWidth)
-		max_layer1 =
-			max(
-				max(
-					max(max(data1[tN-1-blockDim().x], data1[tN-blockDim().x]), data1[tN+1-blockDim().x]),
-					max(max(data1[tN-1], data1[tN]), data1[tN+1]),
-				),
-				max(max(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]),
-			)
-		min_layer1 =
-			min(
-				min(
-					min(min(data1[tN-1-blockDim().x], data1[tN-blockDim().x]), data1[tN+1-blockDim().x]),
-					min(min(data1[tN-1], data1[tN]), data1[tN+1]),
-				),
-				min(min(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]),
-			)
-		# max_layer1 = max(max(data1[tN-1-blockDim().x], data1[tN-blockDim().x]), data1[tN+1-blockDim().x])
-		# max_layer1 = max(max_layer1, max(max(data1[tN-1], data1[tN]), data1[tN+1]))
-		# max_layer1 = max(max_layer1, max(max(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]))
-		# min_layer1 = min(min(data1[tN-1-blockDim().x], data1[tN-blockDim().x]), data1[tN+1-blockDim().x])
-		# min_layer1 = min(min_layer1, min(min(data1[tN-1], data1[tN]), data1[tN+1]))
-		# min_layer1 = min(min_layer1, min(min(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]))
+		# Max of all 9 data1neighbors - flattened chain
+		max_layer1 = data1[tN-1-blockDim().x]
+		max_layer1 = max(max_layer1, data1[tN-blockDim().x])
+		max_layer1 = max(max_layer1, data1[tN+1-blockDim().x])
+		max_layer1 = max(max_layer1, data1[tN-1])
+		max_layer1 = max(max_layer1, data1[tN])
+		max_layer1 = max(max_layer1, data1[tN+1])
+		max_layer1 = max(max_layer1, data1[tN-1+blockDim().x])
+		max_layer1 = max(max_layer1, data1[tN+blockDim().x])
+		max_layer1 = max(max_layer1, data1[tN+1+blockDim().x])
 
-		max_layer23 =
-			max(
-				max(
-					max(max(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x]),
-					max(max(data2[tN-1], data2[tN]), data2[tN+1]),
-				),
-				max(max(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]),
-			)
-		min_layer23 =
-			min(
-				min(
-					min(min(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x]),
-					min(min(data2[tN-1], data2[tN]), data2[tN+1]),
-				),
-				min(min(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]),
-			)
-			
-		# max_layer23 = max(max(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x])
-		# max_layer23 = max(max_layer23, max(max(data2[tN-1], data2[tN]), data2[tN+1]))
-		# max_layer23 = max(max_layer23, max(max(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]))
-		# min_layer23 = min(min(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x])
-		# min_layer23 = min(min_layer23, min(min(data2[tN-1], data2[tN]), data2[tN+1]))
-		# min_layer23 = min(min_layer23, min(min(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]))
-
-		max_layer23 =
-			max(max_layer23,
-				max(
-					max(
-						max(max(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
-						max(max(data3[tN-1], data3[tN]), data3[tN+1]),
-					),
-					max(max(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
-				),
-			)
-		min_layer23 =
-			min(min_layer23,
-				min(
-					min(
-						min(min(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
-						min(min(data3[tN-1], data3[tN]), data3[tN+1]),
-					),
-					min(min(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
-				),
-			)
-
-		# max_layer23 = max(max_layer23, max(max(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]))
-		# max_layer23 = max(max_layer23, max(max(data3[tN-1], data3[tN]), data3[tN+1]))
-		# max_layer23 = max(max_layer23, max(max(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]))
-		# min_layer23 = min(min_layer23, min(min(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]))
-		# min_layer23 = min(min_layer23, min(min(data3[tN-1], data3[tN]), data3[tN+1]))
-		# min_layer23 = min(min_layer23, min(min(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]))
-		# data2tN = data2[tN]
-		if data2[tN] == max(max_layer1, max_layer23) ||
-		   data2[tN] == min(min_layer1, min_layer23)
-			@inbounds out1[thisY, thisX] = abs(data2[tN])
-		end
-		# @inbounds out1[thisY, thisX] = (
-		# 	data2[tN] == max(max_layer1, max_layer23) ||
-		# 	data2[tN] == min(min_layer1, min_layer23)
-		# ) ?
-		# 							   abs(data2[tN]) : 0.0
-	end
-	if (0 < thisY <= h && 0 <= thisX % imgWidth < imgWidth && 0 < thisX <= w)
-		data1[tN] = (@inbounds l[5][thisY, thisX] - @inbounds l[4][thisY, thisX]) / norm
-	end
-	sync_threads()
-	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h && thisX % imgWidth < imgWidth)
-		max_layer23 =
-			max(
-				max(
-					max(max(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x]),
-					max(max(data2[tN-1], data2[tN]), data2[tN+1]),
-				),
-				max(max(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]),
-			)
-		min_layer23 =
-			min(
-				min(
-					min(min(data2[tN-1-blockDim().x], data2[tN-blockDim().x]), data2[tN+1-blockDim().x]),
-					min(min(data2[tN-1], data2[tN]), data2[tN+1]),
-				),
-				min(min(data2[tN-1+blockDim().x], data2[tN+blockDim().x]), data2[tN+1+blockDim().x]),
-			)
-		max_layer23 =
-			max(max_layer23,
-				max(
-					max(
-						max(max(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
-						max(max(data3[tN-1], data3[tN]), data3[tN+1]),
-					),
-					max(max(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
-				),
-			)
-		min_layer23 =
-			min(min_layer23,
-				min(
-					min(
-						min(min(data3[tN-1-blockDim().x], data3[tN-blockDim().x]), data3[tN+1-blockDim().x]),
-						min(min(data3[tN-1], data3[tN]), data3[tN+1]),
-					),
-					min(min(data3[tN-1+blockDim().x], data3[tN+blockDim().x]), data3[tN+1+blockDim().x]),
-				),
-			)
+		# Min of all 9 data1 neighbors - flattened chain
+		min_layer1 = data1[tN-1-blockDim().x]
+		min_layer1 = min(min_layer1, data1[tN-blockDim().x])
+		min_layer1 = min(min_layer1, data1[tN+1-blockDim().x])
+		min_layer1 = min(min_layer1, data1[tN-1])
+		min_layer1 = min(min_layer1, data1[tN])
+		min_layer1 = min(min_layer1, data1[tN+1])
+		min_layer1 = min(min_layer1, data1[tN-1+blockDim().x])
+		min_layer1 = min(min_layer1, data1[tN+blockDim().x])
+		min_layer1 = min(min_layer1, data1[tN+1+blockDim().x])
 		
-		max_layer1 =
-			max(
-				max(
-					max(max(data1[tN-1-blockDim().x], data1[tN-blockDim().x]), data1[tN+1-blockDim().x]),
-					max(max(data1[tN-1], data1[tN]), data1[tN+1]),
-				),
-				max(max(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]),
-			)
-		min_layer1 =
-			min(
-				min(
-					min(min(data1[tN-1-blockDim().x], data1[tN-blockDim().x]), data1[tN+1-blockDim().x]),
-					min(min(data1[tN-1], data1[tN]), data1[tN+1]),
-				),
-				min(min(data1[tN-1+blockDim().x], data1[tN+blockDim().x]), data1[tN+1+blockDim().x]),
-			)
-		# max_layer1 = max(max(data4[tN-1-blockDim().x], data4[tN-blockDim().x]), data4[tN+1-blockDim().x])
-		# max_layer1 = max(max_layer1, max(max(data4[tN-1], data4[tN]), data4[tN+1]))
-		# max_layer1 = max(max_layer1, max(max(data4[tN-1+blockDim().x], data4[tN+blockDim().x]), data4[tN+1+blockDim().x]))
-		# min_layer1 = min(min(data4[tN-1-blockDim().x], data4[tN-blockDim().x]), data4[tN+1-blockDim().x])
-		# min_layer1 = min(min_layer1, min(min(data4[tN-1], data4[tN]), data4[tN+1]))
-		# min_layer1 = min(min_layer1, min(min(data4[tN-1+blockDim().x], data4[tN+blockDim().x]), data4[tN+1+blockDim().x]))
+		# Max of all 9 data2 neighbors - flattened chain
+		max_layer23 = data2[tN-1-blockDim().x]
+		max_layer23 = max(max_layer23, data2[tN-blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN+1-blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN-1])
+		max_layer23 = max(max_layer23, data2[tN])
+		max_layer23 = max(max_layer23, data2[tN+1])
+		max_layer23 = max(max_layer23, data2[tN-1+blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN+blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN+1+blockDim().x])
+		
+		# continue with data3
+		max_layer23 = max(max_layer23, data3[tN-1-blockDim().x])
+		max_layer23 = max(max_layer23, data3[tN-blockDim().x])
+		max_layer23 = max(max_layer23, data3[tN+1-blockDim().x])
+		max_layer23 = max(max_layer23, data3[tN-1])
+		max_layer23 = max(max_layer23, data3[tN])
+		max_layer23 = max(max_layer23, data3[tN+1])
+		max_layer23 = max(max_layer23, data3[tN-1+blockDim().x])
+		max_layer23 = max(max_layer23, data3[tN+blockDim().x])
+		max_layer23 = max(max_layer23, data3[tN+1+blockDim().x])
 
-		if data3[tN] == max(max_layer1, max_layer23) ||
-		   data3[tN] == min(min_layer1, min_layer23)
-			@inbounds out2[thisY, thisX] = abs(data3[tN])
+		# Min of all 9 data2 neighbors - flattened chain
+		min_layer23 = data2[tN-1-blockDim().x]
+		min_layer23 = min(min_layer23, data2[tN-blockDim().x])
+		min_layer23 = min(min_layer23, data2[tN+1-blockDim().x])
+		min_layer23 = min(min_layer23, data2[tN-1])
+		min_layer23 = min(min_layer23, data2[tN])
+		min_layer23 = min(min_layer23, data2[tN+1])
+		min_layer23 = min(min_layer23, data2[tN-1+blockDim().x])
+		min_layer23 = min(min_layer23, data2[tN+blockDim().x])
+		min_layer23 = min(min_layer23, data2[tN+1+blockDim().x])
+		
+		# continue with data3
+		min_layer23 = min(min_layer23, data3[tN-1-blockDim().x])
+		min_layer23 = min(min_layer23, data3[tN-blockDim().x])
+		min_layer23 = min(min_layer23, data3[tN+1-blockDim().x])
+		min_layer23 = min(min_layer23, data3[tN-1])
+		min_layer23 = min(min_layer23, data3[tN])
+		min_layer23 = min(min_layer23, data3[tN+1])
+		min_layer23 = min(min_layer23, data3[tN-1+blockDim().x])
+		min_layer23 = min(min_layer23, data3[tN+blockDim().x])
+		min_layer23 = min(min_layer23, data3[tN+1+blockDim().x])
+
+		max_layer1 = max(max_layer1, max_layer23) 
+		min_layer1 = min(min_layer1, min_layer23)
+
+		data2tN = data2[tN]
+		if data2tN == max_layer1 ||
+		   data2tN == min_layer1
+			@inbounds out1[thisY, thisX] = abs(data2tN)
 		end
-		# @inbounds out2[thisY, thisX] = (
-		# 	data3[tN] == max(max_layer1, max_layer23) ||
-		# 	data3[tN] == min(min_layer1, min_layer23)
-		# ) ?
-		# 							   abs(data3[tN]) : 0.0
+
+		# Max of all 9 data4 neighbors - flattened chain
+		max_layer1 = data4[tN-1-blockDim().x]
+		max_layer1 = max(max_layer1, data4[tN-blockDim().x])
+		max_layer1 = max(max_layer1, data4[tN+1-blockDim().x])
+		max_layer1 = max(max_layer1, data4[tN-1])
+		max_layer1 = max(max_layer1, data4[tN])
+		max_layer1 = max(max_layer1, data4[tN+1])
+		max_layer1 = max(max_layer1, data4[tN-1+blockDim().x])
+		max_layer1 = max(max_layer1, data4[tN+blockDim().x])
+		max_layer1 = max(max_layer1, data4[tN+1+blockDim().x])
+
+		# Min of all 9 data4 neighbors - flattened chain
+		min_layer1 = data4[tN-1-blockDim().x]
+		min_layer1 = min(min_layer1, data4[tN-blockDim().x])
+		min_layer1 = min(min_layer1, data4[tN+1-blockDim().x])
+		min_layer1 = min(min_layer1, data4[tN-1])
+		min_layer1 = min(min_layer1, data4[tN])
+		min_layer1 = min(min_layer1, data4[tN+1])
+		min_layer1 = min(min_layer1, data4[tN-1+blockDim().x])
+		min_layer1 = min(min_layer1, data4[tN+blockDim().x])
+		min_layer1 = min(min_layer1, data4[tN+1+blockDim().x])
+
+		max_layer1 = max(max_layer1, max_layer23) 
+		min_layer1 = min(min_layer1, min_layer23)
+
+		data2tN = data3[tN]
+		if data2tN == max_layer1 ||
+		   data2tN == min_layer1
+			@inbounds out2[thisY, thisX] = abs(data2tN)
+		end
 	end
 	return
 end

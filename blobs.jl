@@ -168,12 +168,12 @@ function gaussianPyramid(
 				if layer == scales
 					threads_blobs = (32, 512 ÷ 32)
 					blocks_blobs = (cld(height, threads_blobs[1] - 2), cld(width, threads_blobs[2] - 2))
-					shmem_blobs = threads_blobs[1] * threads_blobs[2] * sizeof(Float32) * 3
+					shmem_blobs = threads_blobs[1] * threads_blobs[2] * sizeof(Float32) * 4
 					extrema_gpu[octave][2] .= 0
 					extrema_gpu[octave][1] .= 0
 					CUDA.synchronize()
 					# CUDA.@profile trace=true @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 32 blobs_2(
-					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 64 blobs_2(
+					time_taken += CUDA.@elapsed @cuda threads = threads_blobs blocks = blocks_blobs shmem = shmem_blobs maxregs = 40 blobs_2(
 						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])), # why cudaconvert? CuArray requires inline defined arrays when they are non-primitives
 						extrema_gpu[octave][2],
 						extrema_gpu[octave][1],
