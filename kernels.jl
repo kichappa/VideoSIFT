@@ -277,71 +277,87 @@ function blobs_2(l, out2, out1, h::Int32, w::Int32, imgWidth::Int32, norm::Float
 	if (1 < threadIdx().x < blockDim().x && 1 < threadIdx().y < blockDim().y && thisY < h && thisX % imgWidth < imgWidth)
 		# Max of all 9 data1neighbors - flattened chain
 		max_layer1 = data1[tN-1-blockDim().x]
-		max_layer1 = max(max_layer1, data1[tN-blockDim().x])
-		max_layer1 = max(max_layer1, data1[tN+1-blockDim().x])
-		max_layer1 = max(max_layer1, data1[tN-1])
-		max_layer1 = max(max_layer1, data1[tN])
-		max_layer1 = max(max_layer1, data1[tN+1])
-		max_layer1 = max(max_layer1, data1[tN-1+blockDim().x])
-		max_layer1 = max(max_layer1, data1[tN+blockDim().x])
-		max_layer1 = max(max_layer1, data1[tN+1+blockDim().x])
-
 		# Min of all 9 data1 neighbors - flattened chain
 		min_layer1 = data1[tN-1-blockDim().x]
-		min_layer1 = min(min_layer1, data1[tN-blockDim().x])
-		min_layer1 = min(min_layer1, data1[tN+1-blockDim().x])
-		min_layer1 = min(min_layer1, data1[tN-1])
-		min_layer1 = min(min_layer1, data1[tN])
-		min_layer1 = min(min_layer1, data1[tN+1])
-		min_layer1 = min(min_layer1, data1[tN-1+blockDim().x])
-		min_layer1 = min(min_layer1, data1[tN+blockDim().x])
-		min_layer1 = min(min_layer1, data1[tN+1+blockDim().x])
-		
 		# Max of all 9 data2 neighbors - flattened chain
 		max_layer23 = data2[tN-1-blockDim().x]
-		max_layer23 = max(max_layer23, data2[tN-blockDim().x])
-		max_layer23 = max(max_layer23, data2[tN+1-blockDim().x])
-		max_layer23 = max(max_layer23, data2[tN-1])
-		max_layer23 = max(max_layer23, data2[tN])
-		max_layer23 = max(max_layer23, data2[tN+1])
-		max_layer23 = max(max_layer23, data2[tN-1+blockDim().x])
-		max_layer23 = max(max_layer23, data2[tN+blockDim().x])
-		max_layer23 = max(max_layer23, data2[tN+1+blockDim().x])
-		
-		# continue with data3
-		max_layer23 = max(max_layer23, data3[tN-1-blockDim().x])
-		max_layer23 = max(max_layer23, data3[tN-blockDim().x])
-		max_layer23 = max(max_layer23, data3[tN+1-blockDim().x])
-		max_layer23 = max(max_layer23, data3[tN-1])
-		max_layer23 = max(max_layer23, data3[tN])
-		max_layer23 = max(max_layer23, data3[tN+1])
-		max_layer23 = max(max_layer23, data3[tN-1+blockDim().x])
-		max_layer23 = max(max_layer23, data3[tN+blockDim().x])
-		max_layer23 = max(max_layer23, data3[tN+1+blockDim().x])
-
 		# Min of all 9 data2 neighbors - flattened chain
 		min_layer23 = data2[tN-1-blockDim().x]
+
+		max_layer1  = max(max_layer1,  data1[tN-blockDim().x])
+		min_layer1  = min(min_layer1,  data1[tN-blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN-blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN-blockDim().x])
+
+		max_layer1  = max(max_layer1,  data1[tN+1-blockDim().x])
+		min_layer1  = min(min_layer1,  data1[tN+1-blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN+1-blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN+1-blockDim().x])
+
+		max_layer1  = max(max_layer1,  data1[tN-1])
+		min_layer1  = min(min_layer1,  data1[tN-1])
+		max_layer23 = max(max_layer23, data2[tN-1])
 		min_layer23 = min(min_layer23, data2[tN-1])
+
+		max_layer1  = max(max_layer1,  data1[tN])
+		min_layer1  = min(min_layer1,  data1[tN])
+		max_layer23 = max(max_layer23, data2[tN])
 		min_layer23 = min(min_layer23, data2[tN])
+
+		max_layer1  = max(max_layer1,  data1[tN+1])
+		min_layer1  = min(min_layer1,  data1[tN+1])
+		max_layer23 = max(max_layer23, data2[tN+1])
 		min_layer23 = min(min_layer23, data2[tN+1])
+
+		max_layer1  = max(max_layer1,  data1[tN-1+blockDim().x])
+		min_layer1  = min(min_layer1,  data1[tN-1+blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN-1+blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN-1+blockDim().x])
+
+		max_layer1  = max(max_layer1,  data1[tN+blockDim().x])
+		min_layer1  = min(min_layer1,  data1[tN+blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN+blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN+blockDim().x])
+
+		max_layer1  = max(max_layer1,  data1[tN+1+blockDim().x])
+		min_layer1  = min(min_layer1,  data1[tN+1+blockDim().x])
+		max_layer23 = max(max_layer23, data2[tN+1+blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN+1+blockDim().x])
-		
+
+
 		# continue with data3
+		max_layer23 = max(max_layer23, data3[tN-1-blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN-1-blockDim().x])
+
+		max_layer23 = max(max_layer23, data3[tN-blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN-blockDim().x])
+
+		max_layer23 = max(max_layer23, data3[tN+1-blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN+1-blockDim().x])
+
+		max_layer23 = max(max_layer23, data3[tN-1])
 		min_layer23 = min(min_layer23, data3[tN-1])
+
+		max_layer23 = max(max_layer23, data3[tN])
 		min_layer23 = min(min_layer23, data3[tN])
+
+		max_layer23 = max(max_layer23, data3[tN+1])
 		min_layer23 = min(min_layer23, data3[tN+1])
+
+		max_layer23 = max(max_layer23, data3[tN-1+blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN-1+blockDim().x])
+
+		max_layer23 = max(max_layer23, data3[tN+blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN+blockDim().x])
+
+		max_layer23 = max(max_layer23, data3[tN+1+blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN+1+blockDim().x])
 
-		max_layer1 = max(max_layer1, max_layer23) 
+
+
+		# continue with data3
+
+		max_layer1 = max(max_layer1, max_layer23)
 		min_layer1 = min(min_layer1, min_layer23)
 
 		data2tN = data2[tN]
@@ -352,27 +368,36 @@ function blobs_2(l, out2, out1, h::Int32, w::Int32, imgWidth::Int32, norm::Float
 
 		# Max of all 9 data4 neighbors - flattened chain
 		max_layer1 = data4[tN-1-blockDim().x]
-		max_layer1 = max(max_layer1, data4[tN-blockDim().x])
-		max_layer1 = max(max_layer1, data4[tN+1-blockDim().x])
-		max_layer1 = max(max_layer1, data4[tN-1])
-		max_layer1 = max(max_layer1, data4[tN])
-		max_layer1 = max(max_layer1, data4[tN+1])
-		max_layer1 = max(max_layer1, data4[tN-1+blockDim().x])
-		max_layer1 = max(max_layer1, data4[tN+blockDim().x])
-		max_layer1 = max(max_layer1, data4[tN+1+blockDim().x])
-
-		# Min of all 9 data4 neighbors - flattened chain
 		min_layer1 = data4[tN-1-blockDim().x]
+
+		max_layer1 = max(max_layer1, data4[tN-blockDim().x])
 		min_layer1 = min(min_layer1, data4[tN-blockDim().x])
+
+		max_layer1 = max(max_layer1, data4[tN+1-blockDim().x])
 		min_layer1 = min(min_layer1, data4[tN+1-blockDim().x])
+
+		max_layer1 = max(max_layer1, data4[tN-1])
 		min_layer1 = min(min_layer1, data4[tN-1])
+
+		max_layer1 = max(max_layer1, data4[tN])
 		min_layer1 = min(min_layer1, data4[tN])
+
+		max_layer1 = max(max_layer1, data4[tN+1])
 		min_layer1 = min(min_layer1, data4[tN+1])
+
+		max_layer1 = max(max_layer1, data4[tN-1+blockDim().x])
 		min_layer1 = min(min_layer1, data4[tN-1+blockDim().x])
+
+		max_layer1 = max(max_layer1, data4[tN+blockDim().x])
 		min_layer1 = min(min_layer1, data4[tN+blockDim().x])
+
+		max_layer1 = max(max_layer1, data4[tN+1+blockDim().x])
 		min_layer1 = min(min_layer1, data4[tN+1+blockDim().x])
 
-		max_layer1 = max(max_layer1, max_layer23) 
+
+		# Min of all 9 data4 neighbors - flattened chain
+
+		max_layer1 = max(max_layer1, max_layer23)
 		min_layer1 = min(min_layer1, min_layer23)
 
 		data2tN = data3[tN]
