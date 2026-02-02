@@ -280,6 +280,10 @@ function extractBlobXYs(
 	radii_gpu = CuArray(radii)
 	threads = ((maximum(radii) * 2 + 1) + 2 * 1, (maximum(radii) * 2 + 1) + 2 * 1)
 	orientation_gpu = CUDA.zeros(Float32, bins, count)
+	if count == 0
+		println("No blobs found")
+		return time_taken, 0, Float32[], Float32[]
+	end
 
 	# lets store the gradient orientations at each pixel in a 2D array
 	gradient_orientations = []
@@ -397,6 +401,7 @@ function getBlobs(
 	orientations = nothing
 	blobs = nothing
 	counts = Int[]
+	times = Float64[]
 	for i in 1:iterations
 		for o in 1:octaves
 			for l in 1:layers
@@ -504,6 +509,8 @@ function getBlobs(
 			print("\e[2K\e[1G")
 		end
 		push!(counts, count)
+		push!(times, time_taken)
+		time_taken = 0
 	end
-	return time_taken, count, orientations, blobs, XY_gpu, counts
+	return sum(times), count, orientations, blobs, XY_gpu, counts, times
 end

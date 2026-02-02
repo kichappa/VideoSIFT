@@ -11,11 +11,11 @@ fmt = "%.8f"
 let
 	println("Here we go!")
 	cameras = 2
-	nImages = 3
+	nImages = 2
 	img = []
 	imgWidth = 0
 	time_taken = 0
-	iterations = 1
+	iterations = 10
 
 	# multiple ways to process images. Could be a video file, video stream, or images that will be concatenated.
 
@@ -42,8 +42,8 @@ let
 
 	path = "assets/videos/cam22"
 	f = vcat(glob("*.mp4", path), glob("*.mov", path), glob("*.MP4", path), glob("*.MOV", path))[1]
-	push!(v, Float32.(Gray.(getFrame(f, 339))))
-	push!(v, Float32.(Gray.(getFrame(f, 202))))
+	# push!(v, Float32.(Gray.(getFrame(f, 339))))
+	# push!(v, Float32.(Gray.(getFrame(f, 202))))
 
 	# load the images
 	for i in 1:cameras
@@ -65,7 +65,7 @@ let
 	sigma0 = 1.6
 	k = 2^(1 / (layers - 3))
 
-	time_taken, count, orientations, blobs, XY_gpu, counts = getBlobs(
+	time_taken, count, orientations, blobs, XY_gpu, counts, times = getBlobs(
 		img,
 		height,
 		width,
@@ -77,7 +77,7 @@ let
 		k,
 		iterations,
 		time_taken;
-		debug=false,
+		debug = false,
 	)
 
 	println("Got the blobs...")
@@ -95,5 +95,7 @@ let
 	CSV.write("assets/filtered_blobs.csv", df,
 		transform = (col, val) -> typeof(val) <: AbstractFloat ? cfmt(fmt, val) : val)
 
-	println("Time taken: $(round(time_taken / (iterations * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time. Total time taken: $(round(time_taken/iterations, digits=5))s per iteration.")
+	println(
+		"Time taken: $(round(sum(times[begin+1:end]) / ((iterations-1) * nImages), digits=5))s for $layers layers and $octaves octaves per image @ $nImages images at a time. Total time taken: $(round(sum(times[begin+1:end])/(iterations-1), digits=5))s per iteration.",
+	)
 end
