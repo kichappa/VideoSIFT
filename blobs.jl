@@ -111,9 +111,9 @@ function gaussianPyramid(
 							img_gpu,
 							conv_gpu[1],
 							buffer,
-							Int32(width),
-							Int16(height),
-							Int16(imgWidth),
+							UInt32(height),
+							UInt32(width),
+							UInt16(imgWidth),
 							Int8(apron),
 						)
 						CUDA.synchronize()
@@ -122,9 +122,9 @@ function gaussianPyramid(
 							buffer,
 							conv_gpu[1],
 							out_gpu[1][1],
-							Int16(height),
-							Int32(width),
-							Int16(imgWidth),
+							UInt32(height),
+							UInt32(width),
+							UInt16(imgWidth),
 							Int8(apron),
 							# error_count,
 						)
@@ -140,9 +140,9 @@ function gaussianPyramid(
 						out_gpu[octave][layer-1],
 						conv_gpu[layer-1],
 						buffer,
-						Int32(width),
-						Int16(height),
-						Int16(imgWidth / 2^(octave - 1)),
+						UInt32(height),
+						UInt32(width),
+						UInt16(imgWidth / 2^(octave - 1)),
 						Int8(apron),
 					)
 					CUDA.synchronize()
@@ -151,9 +151,9 @@ function gaussianPyramid(
 						buffer,
 						conv_gpu[layer-1],
 						out_gpu[octave][layer],
-						Int16(height),
-						Int32(width),
-						Int16(imgWidth / 2^(octave - 1)),
+						UInt32(height),
+						UInt32(width),
+						UInt16(imgWidth / 2^(octave - 1)),
 						Int8(apron),
 					)
 				end
@@ -177,9 +177,9 @@ function gaussianPyramid(
 						CuArray(reverse([cudaconvert(x) for x in blobs_input_l])), # why cudaconvert? CuArray requires inline defined arrays when they are non-primitives
 						extrema_gpu[octave][2],
 						extrema_gpu[octave][1],
-						Int32(height),
-						Int32(width),
-						Int32(imgWidth / 2^(octave - 1)),
+						UInt32(height),
+						UInt32(width),
+						UInt16(imgWidth / 2^(octave - 1)),
 						Float32(k - 1),
 						# DoGo_gpu[octave][4],
 						# DoGo_gpu[octave][3],
@@ -257,13 +257,13 @@ function extractBlobXYs(
 				UInt32(width_local),
 				UInt16(imgWidth / 2^(octave - 1)),
 				count_gpu,
-				UInt32(octave),
-				UInt32(layer + 1),
+				UInt8(octave),
+				UInt8(layer + 1),
 				0.01f0,
 			)
 			CUDA.synchronize()
 			push!(counts, Integer(collect(count_gpu)[1]))
-			push!(radii, ceil(Int, 1.5 * sigma0 * k^(layer) + 1))
+			push!(radii, ceil(UInt16, 1.5 * sigma0 * k^(layer) + 1))
 		end
 		height_local = height_local ÷ 2
 		width_local = width_local ÷ 2
@@ -289,18 +289,18 @@ function extractBlobXYs(
 		push!(aligned_go, CUDA.zeros(Float32, 4, cld(height, 2^(o - 1)), cld(width, 2^(o - 1))))
 	end
 
-	check_count = CUDA.zeros(UInt64, 1)
+	check_count = CUDA.zeros(UInt32, 1)
 
-	printcount = CUDA.zeros(UInt64, 1)
+	printcount = CUDA.zeros(UInt32, 1)
 	time_taken += CUDA.@elapsed @cuda threads = threads blocks = count shmem = (sizeof(Float32) * (((maximum(radii) * 2 + 1) + 2 * 1)^2 + bins)) maxregs = 32 find_orientations(
 		CuArray([cudaconvert(x) for x in out_gpus]),
 		XY_gpu,
 		orientation_gpu,
-		height,
-		width,
+		UInt32(height),
+		UInt32(width),
 		counts_gpu,
 		radii_gpu,
-		bins,
+		Int32(bins),
 		check_count,
 		printcount,
 	)

@@ -1,6 +1,6 @@
 include("main.helper.jl")
 
-function col_kernel_strips(inp, conv, buffer, width::Int32, height::Int16, imgWidth::Int16, apron::Int8)
+function col_kernel_strips(inp, conv, buffer, height::UInt32, width::UInt32, imgWidth::UInt16, apron::Int8)
 	let
 		blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 		threadNum::UInt16 = threadIdx().x - 1
@@ -36,7 +36,7 @@ end
 # buffH is the height of the buffer including the black apron at the bottom
 # inpH is the height of the image excluding the aprons, after the column kernel
 
-function row_kernel(inp, conv, out, height::Int16, width::Int32, imgWidth::Int16, apron::Int8)
+function row_kernel(inp, conv, out, height::UInt32, width::UInt32, imgWidth::UInt16, apron::Int8)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
 	threads::Int16 = blockDim().x * blockDim().y
@@ -239,7 +239,7 @@ function blobs_1(l5, l4, l3, l2, l1, out2, out1, h, w, imgWidth, norm)#, DoG4, D
 	return
 end
 
-function blobs_2(l, out2, out1, h::Int32, w::Int32, imgWidth::Int32, norm::Float32)#, DoG4, DoG3, DoG2, DoG1)
+function blobs_2(l, out2, out1, h::UInt32, w::UInt32, imgWidth::UInt16, norm::Float32)#, DoG4, DoG3, DoG2, DoG1)
 	tN::UInt16 = threadIdx().x + (threadIdx().y - 1) * blockDim().x
 	threads = blockDim().x * blockDim().y
 
@@ -386,7 +386,7 @@ end
 
 # Kernel to compact the sparse local-extrema image into a list of potential blobs structs
 # also performs a thresholding operation to remove low-contrast blobs (tau = 0.01)
-function stream_compact(extrema, xy, h::UInt32, w::UInt32, imgWidth::UInt16, count, oct::UInt32, lay::UInt32, tau::Float32)
+function stream_compact(extrema, xy, h::UInt32, w::UInt32, imgWidth::UInt16, count, oct::UInt8, lay::UInt8, tau::Float32)
 	threadNum::UInt32 = threadIdx().x + blockDim().x * (blockIdx().x - 1) # 1-indexed
 	#                 (threadIdx().x - 1) ÷ 32 
 	warpNum::UInt32 = (threadIdx().x - 1) >> 5 # 0-indexed
@@ -443,33 +443,36 @@ function stream_compact(extrema, xy, h::UInt32, w::UInt32, imgWidth::UInt16, cou
 end
 
 # function find_orientations(o3, o2, o1, pointsXY, out, h, w, counts, radii, bins, go3, go2, go1, ago3, ago2, ago1, check_count)
-function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_count, printcount)
+function find_orientations(Os, pointsXY, out, h::UInt32, w::UInt32, counts, radii, bins::Int32, check_count, printcount)
 
-	subset = 1 + # 1-indexed
+	subset::UInt8 = 1 + # 1-indexed
 			 (blockIdx().x > counts[1]) +
 			 (blockIdx().x > counts[2]) +
 			 (blockIdx().x > counts[3]) +
 			 (blockIdx().x > counts[4]) +
 			 (blockIdx().x > counts[5])
 
-	r::Int16 = radii[subset]
+	r::UInt16 = radii[subset]
 
-	l_threadNum = threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1) # 1-indexed 
+	l_threadNum::UInt16 = threadIdx().x + ((2 * r + 1 + 2 * 1)) * (threadIdx().y - 1) # 1-indexed 
 	data = CuDynamicSharedArray(Float32, (2 * r + 1 + 2 * 1)^2)
 	orientation = CuDynamicSharedArray(Float32, bins, sizeof(Float32) * (2 * r + 1 + 2 * 1)^2)
 
 	if l_threadNum <= bins
-		orientation[l_threadNum] = 0.0
+		orientation[l_threadNum] = 0.0f0
 	end
 
-	octave = cld(subset, 2)
-	o, h, w = Os[octave], Int(h / 2^(octave - 1)), Int(w / 2^(octave - 1))
+	# octave::UInt8 = cld(subset, Int32(2))
+	octave::UInt8 = (subset + Int32(1)) >> 1
+	o = Os[octave]
+	h::UInt32 = UInt32(Float32(h) / 2^(octave - 1))
+	w::UInt32 = UInt32(Float32(w) / 2^(octave - 1))
 
-	X = pointsXY[blockIdx().x].x
-	Y = pointsXY[blockIdx().x].y
+	X::Int32 = pointsXY[blockIdx().x].x
+	Y::Int32 = pointsXY[blockIdx().x].y
 
-	x = X + threadIdx().y - r - 2 # 1-indexed, -r-2 is to center [1 -> 2(r+1)+1] to [-(r+1) -> (r+1)]
-	y = Y + threadIdx().x - r - 2 # 1-indexed, -r-2 is to center [1 -> 2(r+1)+1] to [-(r+1) -> (r+1)]
+	x::Int32 = X + threadIdx().y - r - 2 # 1-indexed, -r-2 is to center [1 -> 2(r+1)+1] to [-(r+1) -> (r+1)]
+	y::Int32 = Y + threadIdx().x - r - 2 # 1-indexed, -r-2 is to center [1 -> 2(r+1)+1] to [-(r+1) -> (r+1)]
 	sync_threads()
 
 	# load elements around XY from the octave
@@ -487,13 +490,15 @@ function find_orientations(Os, pointsXY, out, h, w, counts, radii, bins, check_c
 			end
 
 			# Calculate the first order derivative through first central difference method
-			dy = data[l_threadNum-1] - data[l_threadNum+1]
-			dx = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
+			dy::Float32 = data[l_threadNum-1] - data[l_threadNum+1]
+			dx::Float32 = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
 			# Calculate the gaussian weight and the magnitude of the position and the orientation of the gradient.
-			weight = exp(-((x - X)^2 + (y - Y)^2) / (2 * (r * 1)^2)) / (2 * pi * (r * 1))
-			magnitude = (x - X)^2 + (y - Y)^2 > 0 ? (dx * (X - x) - dy * (Y - y)) / (2 * sqrt((x - X)^2 + (y - Y)^2)) : sqrt(dy^2 + dx^2) / 4
+			weight::Float32 = exp(-1f0 * ((x - X)^2 + (y - Y)^2) / (2 * (r * 1)^2)) / (2f0 * pi * (r * 1))
+			magnitude::Float32 = (x - X)^2 + (y - Y)^2 > 0 ? (dx * (X - x) - dy * (Y - y)) / (2 * sqrt(1f0 * (x - X)^2 + (y - Y)^2)) : sqrt(dy^2 + dx^2) / 4
 			# Calculate the bin number into which the orientation accumulates
-			bin::Int32 = (x - X)^2 + (y - Y)^2 > 0 ? fld((atan((Y - y), (X - x)) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 : fld((atan(dy, dx) + 2 * pi) % (2 * pi), 2 * pi / bins) + 1 # 1-indexed
+			bin::Int32 = (x - X)^2 + (y - Y)^2 > 0 ? 
+			fld((atan(1f0 * (Y - y), 1f0 * (X - x)) + 2f0 * pi) % (2f0 * pi), 2f0 * pi / bins) + 1 : 
+			fld((atan(dy, dx) + 2f0 * pi) % (2f0 * pi), 2f0 * pi / bins) + 1 # 1-indexed
 
 			CUDA.@atomic orientation[bin] += weight * magnitude
 		end
