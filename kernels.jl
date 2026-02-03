@@ -573,7 +573,6 @@ function filter_blobs(pointXY, orientations, out, count, outCount, outCount_perI
 
 
 	if threadIdx().x == 1 && threadIdx().y == 1
-		# shared_count[1] = CUDA.atomic_add!(pointer(outCount, 1), shared_count[1])
 		shared_count[1] = CUDA.@atomic outCount[1] += shared_count[1]
 		CUDA.@atomic outCount_perImg[ceil(Int32, pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].x / imgWidth)] += shared_count[1]
 	end
@@ -581,20 +580,9 @@ function filter_blobs(pointXY, orientations, out, count, outCount, outCount_perI
 	if coeff_of_variation < threshold
 		if threadIdx().x <= bins
 			out[(shared_count[1]+thisPoint)*(bins+6)+threadIdx().x] = shared_orientations[threadIdx().x, threadIdx().y]
-			# if pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 522 && pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] == 145
-			# 	@cuprintln("orientation[$(threadIdx().x)]: $(shared_orientations[threadIdx().x, threadIdx().y])")# (from $(orientation[threadIdx().x+((blockIdx().x-1)*blockDim().y+threadIdx().y-1)*bins]))")
-			# end
 		end
 		sync_threads()
 		if threadIdx().x == 1
-			# @cuprintln("Th($(threadIdx().x), $(threadIdx().y)), blockIdx: ($(blockIdx().x), $(blockIdx().y), blockDim: ($(blockDim().x), $(blockDim().y)), coeff_of_variation: $coeff_of_variation, ($(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]), $(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6]))from start:$(threadIdx().y+(blockIdx().x-1)*blockDim().y)")
-			# out[(shared_count[1]+thisPoint)*(bins+6)+1+bins] = Float32(pointXY[1+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-			# out[(shared_count[1]+thisPoint)*(bins+6)+2+bins] = Float32(pointXY[2+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-			# out[(shared_count[1]+thisPoint)*(bins+6)+3+bins] = Float32(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
-			# out[(shared_count[1]+thisPoint)*(bins+6)+4+bins] = Float32(pointXY[6+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6])
-			# out[(shared_count[1]+thisPoint)*(bins+6)+5+bins] = Float32(pointXY[4+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] * 2^(pointXY[5+(threadIdx().y+(blockIdx().x-1)*blockDim().y-1)*6] - 1))
-			# out[(shared_count[1]+thisPoint)*(bins+6)+6+bins] = Float32(coeff_of_variation)
-
 			out[(shared_count[1]+thisPoint)*(bins+6)+1+bins] = Float32(2^(pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].oct - 1) * pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].thisX)
 			out[(shared_count[1]+thisPoint)*(bins+6)+2+bins] = Float32(2^(pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].oct - 1) * pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].y)
 			out[(shared_count[1]+thisPoint)*(bins+6)+3+bins] = Float32(pointXY[threadIdx().y+(blockIdx().x-1)*blockDim().y].oct)

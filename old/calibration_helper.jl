@@ -320,7 +320,6 @@ function calibrateCamera(
 
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_err_arr = [], [], [], [], [], []
 
-
 	if typeof(num_cameras) == Int
 		num_cameras = 1:num_cameras
 	end

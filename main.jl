@@ -75,8 +75,8 @@ let
 		nImages,
 		sigma0,
 		k,
-		iterations,
 		time_taken;
+		iterations=iterations,
 		debug = false,
 	)
 
