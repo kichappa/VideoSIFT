@@ -5,6 +5,11 @@ include("blobs.jl")
 include("header.jl")
 include("calibration.helper.jl")
 
+
+ENV["JULIA_CONDAPKG_BACKEND"] = "Current"
+ENV["JULIA_PYTHONCALL_EXE"] = expanduser("~/.conda/envs/cv/bin/python")
+using PythonCall, CondaPkg
+
 fmt = "%.8f"
 blobs = nothing
 let
@@ -27,6 +32,29 @@ let
     println("Processing frames $sfm_start to $sfm_end")
 
 	nImages = 4
+
+	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties = 
+                      calibrate(
+                              "assets/videos/cam",
+                              (22,),
+                              (11, 8, 0),
+                              20,
+                              (-1, 1, 0);
+                              save = false,
+                              debug = false,
+                              verbosity = 1,
+                              from_video = true,
+                              start_frame = [0*25],
+                              end_frame = [10*25],
+                              start_frame_stage2 = [sfm_start],
+                              end_frame_stage2 = [sfm_end],
+                              num_images = [30, Inf],
+                              win_size = (26, 26),
+                              # RO = true,
+                              PnP = true,
+                              ransac = true,
+                              refineLM = true,
+                      );
 
 	# process batches of nImages frames at a time
 	for frame in sfm_start:nImages:sfm_end

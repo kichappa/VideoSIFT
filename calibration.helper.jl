@@ -193,12 +193,12 @@ function videoToFrames(file; path = nothing, dir_name = nothing, filename = noth
 	end
 end
 
-function getFrame(v::VideoIO.VideoReader, frame, fps=25)
+function getFrame(v::VideoIO.VideoReader, frame, fps = 25)
 	seek(v, frame/fps)
 	return read(v)
 end
 
-function getFrame(v::String, frame, fps=25)
+function getFrame(v::String, frame, fps = 25)
 	v = VideoIO.openvideo(v)
 	seek(v, frame/fps)
 	return read(v)
@@ -216,7 +216,7 @@ function __calibrateCamera(py_img, filename, count, camera, i, cb_grid, objp, ob
 
 	if pyconvert(Bool, ret)
 		if debug
-			println("✅")
+			print("✅")
 		end
 		count += 1
 		push!(objpoints, np.array(objp'))
@@ -241,7 +241,7 @@ function __calibrateCamera(py_img, filename, count, camera, i, cb_grid, objp, ob
 			println("❌")
 		end
 	end
-	return count
+	return count, ret
 end
 
 function calibrateCamera(
@@ -259,6 +259,8 @@ function calibrateCamera(
 	num_images = Inf,
 	from_video = false,
 	stride = 1,
+	start_frame = 0,
+	end_frame = nothing,
 	win_size = (11, 11),
 	invert = false,
 	vfile_name = nothing,
@@ -270,13 +272,17 @@ function calibrateCamera(
 	PnP = false,
 	ransac = false,
 	refineLM = false,
-	fps = 25
+	fps = 25,
 )
 
 	cv = pyimport("cv2")
 	np = pyimport("numpy")
 
-	println("Calibrating $(num_cameras) camera(s) in $(target_dir), keyword criteria: $(criteria), save: $(save), ret_py: $(ret_py)")
+	if debug
+		println("$(num_cameras) camera(s) in $(target_dir), keyword criteria: $(criteria), save: $(save), ret_py: $(ret_py)")
+	else
+		println("$(num_cameras) camera(s) in $(target_dir)")
+	end
 
 	if typeof(num_cameras) == Int
 		@assert num_cameras > 0 "Number of cameras must be greater than 0"
@@ -298,7 +304,9 @@ function calibrateCamera(
 	end
 
 	objp = zeros(Float32, 3, prod(cb_grid .| (cb_grid .== 0)))
-	println("size of objp: ", size(objp))
+	if debug
+		println("size of objp: ", size(objp))
+	end
 
 	if cb_plane[3] == 0
 		objp[1, :] = reshape([sign(cb_plane[1]) * x * cb_size for x in 0:(cb_grid[1]-1), y in 0:(cb_grid[2]-1)], 1, :)
@@ -315,8 +323,10 @@ function calibrateCamera(
 		objp[3, :] = reshape([sign(cb_plane[3]) * z * cb_size for y in 0:(cb_grid[2]-1), z in 0:(cb_grid[3]-1)], 1, :)
 		cb_grid = cb_grid[[2, 3]]
 	end
-    println("py_cb_grid: $cb_grid")
-    # print(sparse(objp))
+	if debug
+		println("py_cb_grid: $cb_grid")
+	end
+	# print(sparse(objp))
 
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_err_arr = [], [], [], [], [], []
 
@@ -325,12 +335,40 @@ function calibrateCamera(
 		num_cameras = 1:num_cameras
 	end
 	filenames = Vector{Vector{String}}(undef, length(num_cameras))
+	ret_cameras = Vector{Vector{Bool}}(undef, length(num_cameras))
 	if debug
 		println("Camera array: ", num_cameras)
 	end
 	# for i in 1:num_cameras
 	for i in num_cameras
+		rets = Vector{Bool}()
 		camera = findfirst(x -> x == i, num_cameras)
+
+		# Get camera-specific stride
+		current_stride = if stride isa AbstractArray
+			stride[camera]  # Use camera-specific stride
+		else
+			stride  # Use same stride for all
+		end
+
+		# Get camera-specific start_frame
+		current_start_frame = if start_frame isa AbstractArray
+			start_frame[camera]
+		else
+			start_frame
+		end
+
+		# Get camera-specific end_frame
+		current_end_frame = if !isnothing(end_frame)
+			if end_frame isa AbstractArray
+				end_frame[camera]
+			else
+				end_frame
+			end
+		else
+			nothing
+		end
+
 		filenames[camera] = Vector{String}()
 		objpoints = []
 		imgpoints = []
@@ -346,6 +384,12 @@ function calibrateCamera(
 				println("Searching for images in $(target_dir * string(i)) for camera $(i)")
 			end
 		end
+		# print stride and start_frame
+		if debug
+			println("Camera $(i): Using stride = $(current_stride), start_frame = $(current_start_frame)")
+		else
+			print("Camera $(i)...")
+		end
 		count = 0
 		# count = Threads.Atomic{Int}(0) 
 		#Threads.@threads 
@@ -359,11 +403,15 @@ function calibrateCamera(
 			else
 				f = VideoIO.openvideo(vfile_name)
 			end
-			frame_number = 1
+			frame_number = current_start_frame  # Start from specified frame
+
 			try
-				while !eof(f) && count < num_images
+				# Skip to start frame
+				seek(f, current_start_frame / fps)
+
+				while !eof(f) && count < num_images && (isnothing(current_end_frame) || frame_number < current_end_frame)
 					jl_img = read(f)
-					if (frame_number - 1) % stride == 0
+					if (frame_number - current_start_frame) % current_stride == 0
 						if debug && verbosity >= 1
 							print("Processing: Frame $(frame_number)($count)...")
 						end
@@ -374,7 +422,7 @@ function calibrateCamera(
 						py_img = cv.cvtColor(np.array([UInt8(x.val) for x in jl_img]), cv.COLOR_GRAY2BGR)
 
 						try
-							count = __calibrateCamera(
+							count, ret = __calibrateCamera(
 								py_img,
 								"$(frame_number)",
 								count,
@@ -394,11 +442,15 @@ function calibrateCamera(
 								target_dir = target_dir,
 								win_size = win_size,
 							)
+							push!(rets, pyconvert(Bool, ret))
 						catch
 							continue
 						end
 					end
 					frame_number += 1
+					if debug
+						print("\e[2K\e[1G")
+					end
 				end
 			catch e
 				println("Error reading video: ", e)
@@ -426,7 +478,7 @@ function calibrateCamera(
 					py_img = cv.cvtColor(np.array([UInt8(x.val) for x in jl_img]), cv.COLOR_GRAY2BGR)
 
 					try
-						count =
+						count, ret =
 							__calibrateCamera(
 								py_img,
 								filename,
@@ -447,6 +499,7 @@ function calibrateCamera(
 								target_dir = target_dir,
 								win_size = win_size,
 							)
+						push!(rets, pyconvert(Bool, ret))
 					catch
 						continue
 					end
@@ -491,16 +544,18 @@ function calibrateCamera(
 		# objpoints = reduce(vcat, objpoints_local)
 		# imgpoints = reduce(vcat, imgpoints_local)
 		# append!(filenames[camera], reduce(vcat, filenames_local))
+		ret_cameras[camera] = rets
 
 		if jl_img == nothing
 			println("No images found for camera $(i)")
 			continue
 		end
-
-		if PnP
-			print("Camera $(i): positioning...")
-		else
-			print("Camera $(i): calibration...")
+		if debug
+			if PnP
+				print("Camera $(i): positioning...")
+			else
+				print("Camera $(i): calibration...")
+			end
 		end
 
 		ret, mtx, dist, rvecs, tvecs, inliers = nothing, nothing, nothing, nothing, nothing, nothing
@@ -561,31 +616,44 @@ function calibrateCamera(
 					criteria = criteria)
 			end
 		end
-		println(" complete!")
-		
+		if sum(rets) == length(rets)
+			# all images were successful
+			println(" ✅!")
+		elseif sum(rets) > length(rets) / 2
+			# more than half were successful
+			println(" ⚠️!")
+		else
+			# less than half were successful
+			println(" ❌!")
+		end
+
 		if refineLM
 			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
-			println("\tError before RefineLM: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
+			if debug
+				println("\tError before RefineLM: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
+			end
 			for j in axes(objpoints, 1)
 				if ransac
 					try
 						if length(inliers[j-1]) >= 3
 							obj_subset = objpoints[j][inliers[j-1]]
-							obj_subset = np.reshape(obj_subset, (-1, 3)) 
-							obj_subset = np.asarray(obj_subset, dtype=np.float64)
+							obj_subset = np.reshape(obj_subset, (-1, 3))
+							obj_subset = np.asarray(obj_subset, dtype = np.float64)
 
 							img_subset = imgpoints[j][inliers[j-1]]
 							img_subset = np.reshape(img_subset, (-1, 2))
-							img_subset = np.asarray(img_subset, dtype=np.float64)
+							img_subset = np.asarray(img_subset, dtype = np.float64)
 
-							
+
 							obj_subset = np.ascontiguousarray(obj_subset)
 							img_subset = np.ascontiguousarray(img_subset)
-							
+
 							rvec, tvec = cv.solvePnPRefineLM(obj_subset, img_subset, guess_mtx[findfirst(x -> x == i, num_cameras)], guess_dist[findfirst(x -> x == i, num_cameras)], rvecs[j-1], tvecs[j-1])
 						end
 					catch e
-						println("\tRefining failed in image $j after RANSAC. Skipping.")
+						if debug
+							println("\tRefining failed in image $j after RANSAC. Skipping.")
+						end
 						rvec = rvecs[j-1]
 						tvec = tvecs[j-1]
 					end
@@ -599,7 +667,7 @@ function calibrateCamera(
 		end
 
 		reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
-		if debug 
+		if debug
 			println("Camera $(i) calibration error: $ret: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
 			if verbosity >= 2
 				println("Camera $(i) matrix: ", mtx)
@@ -627,7 +695,7 @@ function calibrateCamera(
 	# 	for y in tvecs_arr
 	# 		println("size of tvecs_arr[$i] = $(size(y))")
 	# 		i+=1
-		
+
 	# 	# 	for x in y
 	# 	# 		println("($j, $i): $x --> $(pyconvert(Matrix, x))\n")
 	# 	# 		i+=1
@@ -664,11 +732,11 @@ function calibrateCamera(
 	jl_tvecs_arr = [reduce(hcat, [pyconvert(Matrix, x) for x in collect(y)]) for y in tvecs_arr]
 
 	if ret_py
-		return jl_ret_arr, jl_mtx_arr, jl_dist_arr, jl_rvecs_arr, jl_tvecs_arr, reproj_err_arr, filenames, [ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr]
+		return jl_ret_arr, jl_mtx_arr, jl_dist_arr, jl_rvecs_arr, jl_tvecs_arr, reproj_err_arr, filenames, ret_cameras, [ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr]
 	elseif return_py_intrinsic
-		return jl_ret_arr, jl_mtx_arr, jl_dist_arr, jl_rvecs_arr, jl_tvecs_arr, reproj_err_arr, filenames, mtx_arr, dist_arr
+		return jl_ret_arr, jl_mtx_arr, jl_dist_arr, jl_rvecs_arr, jl_tvecs_arr, reproj_err_arr, filenames, ret_cameras, mtx_arr, dist_arr
 	else
-		return jl_ret_arr, jl_mtx_arr, jl_dist_arr, jl_rvecs_arr, jl_tvecs_arr, reproj_err_arr, filenames
+		return jl_ret_arr, jl_mtx_arr, jl_dist_arr, jl_rvecs_arr, jl_tvecs_arr, reproj_err_arr, filenames, ret_cameras
 	end
 end
 
@@ -687,6 +755,10 @@ function calibrate(
 	num_images = [30, Inf],
 	from_video = false,
 	stride = 1,
+	start_frame = 0,
+	end_frame = nothing,
+	start_frame_stage2 = nothing,
+	end_frame_stage2 = nothing,
 	win_size = (11, 11),
 	invert = false,
 	vfile_name = nothing,
@@ -698,41 +770,67 @@ function calibrate(
 	PnP = false,
 	ransac = false,
 	refineLM = false,
-	fps = 25,
-	
-)
+	fps = 25)
 	properties = Dict([
 		("target_dir", target_dir),
 		("num_cameras", num_cameras),
 		("cb_grid", cb_grid),
 		("cb_size", cb_size),
-		("cb_plane", cb_plane)
-		])
-	_, _, _, _, _, _, _, py_mtx_arr, py_dist_arr =
-	calibrateCamera(
-	target_dir,
-	num_cameras,
-	cb_grid,
-	cb_size,
-	cb_plane;
-		save = false,
-		debug = true,
-		num_images = num_images[1],
-		stride = floor(Int, 10*60/num_images[1]),
-		return_py_intrinsic = true,
-		invert = invert,
-		from_video = from_video,
-		win_size = win_size,
-		# guess_mtx = py_mtx_arr,
-		# guess_dist = py_dist_arr,
-		verbosity = verbosity,
-		RO = RO,
-		# refineLM = false,
-		iFixedPoint = 20 * 3 + 16,
-		)
-	if ret_py
-		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, py =
+		("cb_plane", cb_plane),
+	])
+
+	# Stage 1: Intrinsic calibration parameters
+	default_end_frame = 10 * fps  # Frame at 10 seconds
+	end_frame = isnothing(end_frame) ? default_end_frame : end_frame
+
+	if end_frame isa AbstractArray
+		@assert length(end_frame) == length(num_cameras) "end_frame array length must match number of cameras"
+	end
+
+	if stride isa AbstractArray
+		@assert length(stride) == length(num_cameras) "Stride array length must match number of cameras"
+	end
+
+	if start_frame isa AbstractArray
+		@assert length(start_frame) == length(num_cameras) "start_frame array length must match number of cameras"
+	end
+
+	# Calculate stage 1 stride based on end_frame
+	stage1_stride = floor.(Int, (end_frame .- start_frame) ./ num_images[1])
+
+	# Stage 2: Extrinsic (PnP) calibration parameters
+	# Default to stage 1 values if not specified
+	start_frame_stage2 = isnothing(start_frame_stage2) ? 0 : start_frame_stage2
+	end_frame_stage2 = isnothing(end_frame_stage2) ? Inf : end_frame_stage2
+	print("Stage 1: Performing intrinsic calibration on ")
+	_, _, _, _, _, _, _, _, py_mtx_arr, py_dist_arr =
 		calibrateCamera(
+			target_dir,
+			num_cameras,
+			cb_grid,
+			cb_size,
+			cb_plane;
+			save = false,
+			debug = debug,
+			num_images = num_images[1],
+			stride = stage1_stride,
+			start_frame = start_frame,
+			return_py_intrinsic = true,
+			invert = invert,
+			from_video = from_video,
+			win_size = win_size,
+			# guess_mtx = py_mtx_arr,
+			# guess_dist = py_dist_arr,
+			verbosity = verbosity,
+			RO = RO,
+			# refineLM = false,
+			iFixedPoint = 20 * 3 + 16,
+			fps = fps,
+		)
+	print("Stage 2: Performing extrinsic calibration on ")
+	if ret_py
+		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, py =
+			calibrateCamera(
 				target_dir,
 				num_cameras,
 				cb_grid,
@@ -741,7 +839,8 @@ function calibrate(
 				save = save,
 				debug = debug,
 				num_images = num_images[2],
-				# stride = 10,
+				start_frame = start_frame_stage2,
+				end_frame = end_frame_stage2,
 				ret_py = ret_py,
 				invert = invert,
 				from_video = from_video,
@@ -752,11 +851,12 @@ function calibrate(
 				PnP = true,
 				ransac = ransac,
 				refineLM = refineLM,
+				fps = fps,
 			)
-		return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, properties, py
+		return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties, py
 	else
-		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames =
-		calibrateCamera(
+		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret =
+			calibrateCamera(
 				target_dir,
 				num_cameras,
 				cb_grid,
@@ -764,8 +864,9 @@ function calibrate(
 				cb_plane;
 				save = save,
 				debug = debug,
-				# num_images = 20,
-				# stride = 10,
+				num_images = num_images[2],
+				start_frame = start_frame_stage2,
+				end_frame = end_frame_stage2,
 				ret_py = ret_py,
 				invert = invert,
 				from_video = from_video,
@@ -774,13 +875,14 @@ function calibrate(
 				guess_dist = py_dist_arr,
 				verbosity = verbosity,
 				PnP = true,
-				ransac = true,
-				refineLM = true,
+				ransac = ransac,
+				refineLM = refineLM,
+				fps = fps,
 			)
 		if return_py_intrinsic
-			return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, properties, py_mtx_arr, py_dist_arr
+			return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties, py_mtx_arr, py_dist_arr
 		else
-			return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, properties
+			return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties
 		end
 	end
 end
