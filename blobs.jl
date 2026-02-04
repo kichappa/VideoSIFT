@@ -414,7 +414,7 @@ function getBlobs(
 			end
 		end
 		if !debug
-			print("Iteration $i...")
+			# print("Iteration $i...")
 		end
 
 		# copy out_gpu to another variable
@@ -440,7 +440,8 @@ function getBlobs(
 			octaves,
 			layers,
 			sigma0,
-			k,
+			k;
+			debug = debug,
 		)
 		# -----------------------------------------------------------------------------------------------------------------------------
 		# println("Found the blobs...")
@@ -498,7 +499,7 @@ function getBlobs(
 			width,
 			imgWidth,
 			i;
-			debug = false,
+			debug = debug,
 		)
 		# -----------------------------------------------------------------------------------------------------------------------------
 		time_taken += time_taken_here
@@ -506,7 +507,7 @@ function getBlobs(
 			println()
 		end
 		if !debug
-			print("\e[2K\e[1G")
+			# print("\e[2K\e[1G")
 		end
 		push!(counts, count)
 		push!(times, time_taken)

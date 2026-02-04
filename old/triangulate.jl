@@ -210,7 +210,15 @@ function triangulatePoints(points, image_names, cams, datafile)
 	R = []
 	t = []
 	for view in axes(points, 3)
-		K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
+		# Handle both JLD file path and direct calibration data
+		if datafile isa AbstractString
+			# datafile is a path to JLD file
+			K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
+		else
+			# datafile is a tuple/named tuple: (ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+			ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = datafile
+			K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+		end
 		push!(K, K1)
 		push!(d, d1)
 		push!(R, R1)
@@ -261,7 +269,15 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 	R = []
 	t = []
 	for view in axes(points, 3)
-		K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
+		# Handle both JLD file path and direct calibration data
+		if datafile isa AbstractString
+			# datafile is a path to JLD file
+			K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
+		else
+			# datafile is a tuple/named tuple: (ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+			ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = datafile
+			K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+		end
 		push!(K, K1)
 		push!(d, d1)
 		push!(R, R1)

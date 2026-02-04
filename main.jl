@@ -10,12 +10,12 @@ fmt = "%.8f"
 
 let
 	println("Here we go!")
-	cameras = 2
-	nImages = 2
+	cameras = 1
+	nImages = 1
 	img = []
 	imgWidth = 0
 	time_taken = 0
-	iterations = 10
+	iterations = 1
 
 	# multiple ways to process images. Could be a video file, video stream, or images that will be concatenated.
 
@@ -38,16 +38,18 @@ let
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam13/DSCF7568.JPG"))))
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam13/DSCF7569.JPG"))))
 	# push!(v, Float32.(Gray.(FileIO.load("assets/videos/cam13/DSCF7570.JPG"))))
-	# push!(v, Float32.(Gray.(FileIO.load("assets/images/DSCF7591.JPG"))))
+	# push!(v, Float32.(Gray.(FileIO.load("old/assets/images/DSCF7591.JPG"))))
 
 	path = "assets/videos/cam22"
 	f = vcat(glob("*.mp4", path), glob("*.mov", path), glob("*.MP4", path), glob("*.MOV", path))[1]
-	# push!(v, Float32.(Gray.(getFrame(f, 339))))
-	# push!(v, Float32.(Gray.(getFrame(f, 202))))
+	push!(v, Float32.(Gray.(getFrame(f, 339))))
+	push!(v, Float32.(Gray.(getFrame(f, 202))))
 
 	# load the images
 	for i in 1:cameras
 		img_temp = v[i]
+		# h, w = size(img_temp)
+		# img_temp = imresize(img_temp, (fld(h , 3), fld(w, 3)))
 		if i == 1
 			img = img_temp
 			imgWidth = size(img, 2)
@@ -55,6 +57,9 @@ let
 			img = cat(img, img_temp, dims = 2)
 		end
 	end
+
+	# save concatenated image for reference
+	FileIO.save("assets/go/concat_image.png", colorview(Gray, img ./ maximum(img)))
 
 	height, width = size(img)
 	println(size(img))
@@ -77,7 +82,7 @@ let
 		k,
 		time_taken;
 		iterations=iterations,
-		debug = false,
+		debug = true,
 	)
 
 	println("Got the blobs...")

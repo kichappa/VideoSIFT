@@ -281,7 +281,7 @@ function calibrateCamera(
 	if debug
 		println("$(num_cameras) camera(s) in $(target_dir), keyword criteria: $(criteria), save: $(save), ret_py: $(ret_py)")
 	else
-		println("$(num_cameras) camera(s) in $(target_dir)")
+		# println("$(num_cameras) camera(s) in $(target_dir)")
 	end
 
 	if typeof(num_cameras) == Int
@@ -388,7 +388,7 @@ function calibrateCamera(
 		if debug
 			println("Camera $(i): Using stride = $(current_stride), start_frame = $(current_start_frame)")
 		else
-			print("Camera $(i)...")
+			# print("Camera $(i)...")
 		end
 		count = 0
 		# count = Threads.Atomic{Int}(0) 
@@ -616,16 +616,16 @@ function calibrateCamera(
 					criteria = criteria)
 			end
 		end
-		if sum(rets) == length(rets)
-			# all images were successful
-			println(" ✅!")
-		elseif sum(rets) > length(rets) / 2
-			# more than half were successful
-			println(" ⚠️!")
-		else
-			# less than half were successful
-			println(" ❌!")
-		end
+		# if sum(rets) == length(rets)
+		# 	# all images were successful
+		# 	println(" ✅!")
+		# elseif sum(rets) > length(rets) / 2
+		# 	# more than half were successful
+		# 	println(" ⚠️!")
+		# else
+		# 	# less than half were successful
+		# 	println(" ❌!")
+		# end
 
 		if refineLM
 			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
@@ -802,7 +802,7 @@ function calibrate(
 	# Default to stage 1 values if not specified
 	start_frame_stage2 = isnothing(start_frame_stage2) ? 0 : start_frame_stage2
 	end_frame_stage2 = isnothing(end_frame_stage2) ? Inf : end_frame_stage2
-	print("Stage 1: Performing intrinsic calibration on ")
+	# print("Stage 1: Performing intrinsic calibration on ")
 	_, _, _, _, _, _, _, _, py_mtx_arr, py_dist_arr =
 		calibrateCamera(
 			target_dir,
@@ -827,7 +827,7 @@ function calibrate(
 			iFixedPoint = 20 * 3 + 16,
 			fps = fps,
 		)
-	print("Stage 2: Performing extrinsic calibration on ")
+	# print("Stage 2: Performing extrinsic calibration on ")
 	if ret_py
 		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, py =
 			calibrateCamera(
