@@ -132,7 +132,7 @@ function triangulate_batched(Ks, Rs, ts, points)
 
 	# Preallocate output [3×N×(M-1)]
 	triangulated_points = CUDA.zeros(Float32, 3, N, M - 1)
-	for pair in 1:M-1
+	for pair in 1:(M-1)
 		triangulated_points[:, :, pair] = triangulate_pair(
 			Ps_norm[:, :, pair],
 			Ps_norm[:, :, pair+1],
@@ -197,7 +197,7 @@ function triangulate_pair(P1, P2, pts1, pts2, T1, T2)
 
 	# Extract the last column of V (the right singular vectors)
 	V = F.V
-	triangulated_points = V[begin:end-1, 4, :] ./ V[4, 4, :]'
+	triangulated_points = V[begin:(end-1), 4, :] ./ V[4, 4, :]'
 
 	# Rescale the triangulated points
 	return triangulated_points
@@ -248,7 +248,7 @@ function triangulatePoints(points, image_names, cams, datafile)
 	for view in axes(points, 3)
 		cumulative_assignments[:, view+1] = assignments[view][cumulative_assignments[:, view]]
 	end
-	cumulative_assignments = cumulative_assignments[:, begin+1:end]
+	cumulative_assignments = cumulative_assignments[:, (begin+1):end]
 
 	matched_points = copy(points)
 	for view in axes(points, 3)
@@ -257,9 +257,9 @@ function triangulatePoints(points, image_names, cams, datafile)
 
 	reconstructed_points = zeros(Float32, 3, size(points, 2), size(points, 3))
 
-	reconstructed_points[:, :, begin:end-1] = triangulate_batched(K, R, t, matched_points)
+	reconstructed_points[:, :, begin:(end-1)] = triangulate_batched(K, R, t, matched_points)
 
-	return distances[begin:end-1], cumulative_assignments[:, begin:end-1], reconstructed_points[:, :, begin:end-1]
+	return distances[begin:(end-1)], cumulative_assignments[:, begin:(end-1)], reconstructed_points[:, :, begin:(end-1)]
 end
 
 function triangulateSubsetPoints(points, image_names, cams, datafile)
@@ -268,7 +268,8 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 	d = []
 	R = []
 	t = []
-	for view in axes(points, 3)
+	# iterate over views to get calibration data for each view
+	for view in eachindex(points)
 		# Handle both JLD file path and direct calibration data
 		if datafile isa AbstractString
 			# datafile is a path to JLD file
@@ -287,23 +288,23 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 	# distances are stored in a 3D array,
 	# each layer (third dimension) i contains the 3D distances between points in view[i] (row) and view[i+1] (column)
 
-	sizes = size.(points, 2)
-	distances = Vector{Matrix{Float32}}(undef, size(points))
-	# distances = zeros(size(points)[[2, 2, 3]])
-    for i in eachindex(sizes)
-        println("$i, $(i % size(points, 1) + 1)")
-    end
-	pwise_max_sizes = [maximum([sizes[i], sizes[i % size(points, 1) + 1]]) for i in eachindex(sizes)]
-	for view1 in axes(points, 3)
-		view2 = (view1) % size(points, 3) + 1
-		local_distances = zeros(Float32, size(points[view1], 2), size(points[view2], 2))
+	sizes = size.(points, 2) # also potentially offset if points are offset in indexing
+	distances = similar(points, Matrix{Float32})
+	for i in eachindex(points)
+		next_i = (i - firstindex(points) + 1) % length(points) + firstindex(points)
+		println("View-pairs ($i, $next_i) with sizes ($(sizes[i]), $(sizes[next_i]))")
+	end
+	pwise_max_sizes = [maximum([sizes[i], sizes[(i-firstindex(sizes)+1)%length(sizes)+firstindex(sizes)]]) for i in eachindex(sizes)]
+	for view1 in eachindex(points)
+		view2 = (view1 - firstindex(points) + 1) % length(points) + firstindex(points)
+		local_distances = zeros(Float32, pwise_max_sizes[view1], pwise_max_sizes[view1])
 		for i in axes(points[view1], 2)
 			for j in axes(points[view2], 2)
 				local_distances[i, j] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[view1][:, i], points[view2][:, j])
 			end
 		end
 		distances[view1] = fill(2*maximum(local_distances), pwise_max_sizes[view1], pwise_max_sizes[view1])
-		distances[view1][begin:begin+size(points[view1], 2)-1, begin:begin+size(points[view2], 2)-1] = local_distances
+		distances[view1][begin:(begin+size(points[view1], 2)-1), begin:(begin+size(points[view2], 2)-1)] = local_distances
 	end
 
 	assignments = []
@@ -317,7 +318,7 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 	for view in axes(points, 3)
 		cumulative_assignments[:, view+1] = assignments[view][cumulative_assignments[:, view]]
 	end
-	cumulative_assignments = cumulative_assignments[:, begin+1:end]
+	cumulative_assignments = cumulative_assignments[:, (begin+1):end]
 
 	matched_points = copy(points)
 	for view in axes(points, 3)
@@ -326,9 +327,9 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 
 	reconstructed_points = zeros(Float32, 3, size(points, 2), size(points, 3))
 
-	reconstructed_points[:, :, begin:end-1] = triangulate_batched(K, R, t, matched_points)
+	reconstructed_points[:, :, begin:(end-1)] = triangulate_batched(K, R, t, matched_points)
 
-	return distances[begin:end-1], cumulative_assignments[:, begin:end-1], reconstructed_points[:, begin:end-1, :]
+	return distances[begin:(end-1)], cumulative_assignments[:, begin:(end-1)], reconstructed_points[:, begin:(end-1), :]
 end
 
 function plotReconstructedPoints(points::AbstractMatrix)
