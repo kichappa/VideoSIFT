@@ -11,11 +11,13 @@ Pkg.add([
     "DelimitedFiles", 
     "FileIO", 
     "Format", 
+    "GLMakie",
     "Glob",
     "Hungarian",
     "Images", 
     "JLD2",
     "LinearAlgebra",
+    "NNlib"
     "OffsetArrays",
     "Printf",
     "PythonCall",

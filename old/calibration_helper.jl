@@ -156,7 +156,9 @@ function findChessboardCorners(image::Vector, cb_grid; criteria = nothing, cv = 
 	for i in eachindex(image)
 		ret, corner = __findChessboardCorners(image[i], cb_grid, cv, np; criteria = criteria, invert = invert)
 		rets[i] = ret
-		corners[:, :, i] = permutedims(corner)
+		if ret
+			corners[:, :, i] = permutedims(corner)
+		end
 	end
 	return rets, corners
 end
@@ -193,12 +195,12 @@ function videoToFrames(file; path = nothing, dir_name = nothing, filename = noth
 	end
 end
 
-function getFrame(v::VideoIO.VideoReader, frame, fps=25)
+function getFrame(v::VideoIO.VideoReader, frame, fps = 25)
 	seek(v, frame/fps)
 	return read(v)
 end
 
-function getFrame(v::String, frame, fps=25)
+function getFrame(v::String, frame, fps = 25)
 	v = VideoIO.openvideo(v)
 	seek(v, frame/fps)
 	return read(v)
@@ -270,7 +272,7 @@ function calibrateCamera(
 	PnP = false,
 	ransac = false,
 	refineLM = false,
-	fps = 25
+	fps = 25,
 )
 
 	cv = pyimport("cv2")
@@ -315,8 +317,8 @@ function calibrateCamera(
 		objp[3, :] = reshape([sign(cb_plane[3]) * z * cb_size for y in 0:(cb_grid[2]-1), z in 0:(cb_grid[3]-1)], 1, :)
 		cb_grid = cb_grid[[2, 3]]
 	end
-    println("py_cb_grid: $cb_grid")
-    # print(sparse(objp))
+	println("py_cb_grid: $cb_grid")
+	# print(sparse(objp))
 
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_err_arr = [], [], [], [], [], []
 
@@ -561,7 +563,7 @@ function calibrateCamera(
 			end
 		end
 		println(" complete!")
-		
+
 		if refineLM
 			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
 			println("\tError before RefineLM: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
@@ -570,17 +572,17 @@ function calibrateCamera(
 					try
 						if length(inliers[j-1]) >= 3
 							obj_subset = objpoints[j][inliers[j-1]]
-							obj_subset = np.reshape(obj_subset, (-1, 3)) 
-							obj_subset = np.asarray(obj_subset, dtype=np.float64)
+							obj_subset = np.reshape(obj_subset, (-1, 3))
+							obj_subset = np.asarray(obj_subset, dtype = np.float64)
 
 							img_subset = imgpoints[j][inliers[j-1]]
 							img_subset = np.reshape(img_subset, (-1, 2))
-							img_subset = np.asarray(img_subset, dtype=np.float64)
+							img_subset = np.asarray(img_subset, dtype = np.float64)
 
-							
+
 							obj_subset = np.ascontiguousarray(obj_subset)
 							img_subset = np.ascontiguousarray(img_subset)
-							
+
 							rvec, tvec = cv.solvePnPRefineLM(obj_subset, img_subset, guess_mtx[findfirst(x -> x == i, num_cameras)], guess_dist[findfirst(x -> x == i, num_cameras)], rvecs[j-1], tvecs[j-1])
 						end
 					catch e
@@ -598,7 +600,7 @@ function calibrateCamera(
 		end
 
 		reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
-		if debug 
+		if debug
 			println("Camera $(i) calibration error: $ret: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
 			if verbosity >= 2
 				println("Camera $(i) matrix: ", mtx)
@@ -626,7 +628,7 @@ function calibrateCamera(
 	# 	for y in tvecs_arr
 	# 		println("size of tvecs_arr[$i] = $(size(y))")
 	# 		i+=1
-		
+
 	# 	# 	for x in y
 	# 	# 		println("($j, $i): $x --> $(pyconvert(Matrix, x))\n")
 	# 	# 		i+=1
@@ -697,41 +699,39 @@ function calibrate(
 	PnP = false,
 	ransac = false,
 	refineLM = false,
-	fps = 25,
-	
-)
+	fps = 25,)
 	properties = Dict([
 		("target_dir", target_dir),
 		("num_cameras", num_cameras),
 		("cb_grid", cb_grid),
 		("cb_size", cb_size),
-		("cb_plane", cb_plane)
-		])
+		("cb_plane", cb_plane),
+	])
 	_, _, _, _, _, _, _, py_mtx_arr, py_dist_arr =
-	calibrateCamera(
-	target_dir,
-	num_cameras,
-	cb_grid,
-	cb_size,
-	cb_plane;
-		save = false,
-		debug = true,
-		num_images = num_images[1],
-		stride = floor(Int, 10*60/num_images[1]),
-		return_py_intrinsic = true,
-		invert = invert,
-		from_video = from_video,
-		win_size = win_size,
-		# guess_mtx = py_mtx_arr,
-		# guess_dist = py_dist_arr,
-		verbosity = verbosity,
-		RO = RO,
-		# refineLM = false,
-		iFixedPoint = 20 * 3 + 16,
+		calibrateCamera(
+			target_dir,
+			num_cameras,
+			cb_grid,
+			cb_size,
+			cb_plane;
+			save = false,
+			debug = true,
+			num_images = num_images[1],
+			stride = floor(Int, 10*60/num_images[1]),
+			return_py_intrinsic = true,
+			invert = invert,
+			from_video = from_video,
+			win_size = win_size,
+			# guess_mtx = py_mtx_arr,
+			# guess_dist = py_dist_arr,
+			verbosity = verbosity,
+			RO = RO,
+			# refineLM = false,
+			iFixedPoint = 20 * 3 + 16,
 		)
 	if ret_py
 		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, py =
-		calibrateCamera(
+			calibrateCamera(
 				target_dir,
 				num_cameras,
 				cb_grid,
@@ -755,7 +755,7 @@ function calibrate(
 		return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, properties, py
 	else
 		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames =
-		calibrateCamera(
+			calibrateCamera(
 				target_dir,
 				num_cameras,
 				cb_grid,

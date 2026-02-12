@@ -88,15 +88,23 @@ end
 # X is the 3D point in space to be found
 # uses CUDA to speed up the process
 
-# function to calculate the normization matrix for a view
-function compute_T(points)
-	μ = mean!(ones(2, 1, size(points, 3)), points)
-	scale = sqrt(2) ./ dropdims(mean!(ones(1, 1, size(points, 3)), sqrt.(sum((points .- μ) .^ 2, dims = 1))), dims = (1, 2))
+# function to calculate the normization matrix for a view 
+# (3D array version with fixed number of points across views)
+function compute_T(points::AbstractArray{T, 3}) where T
+	μ = Statistics.mean!(ones(2, 1, size(points, 3)), points)
+
+	scale = sqrt(2) ./
+			dropdims(
+		Statistics.mean!(ones(1, 1, size(points, 3)),
+			sqrt.(sum((points .- μ) .^ 2, dims = 1)),
+		),
+		dims = (1, 2),
+	)
 	μ = dropdims(μ, dims = 2)
 
 	μ = CuArray(μ)
 	scale = CuArray(scale)
-	Ts = CUDA.zeros(eltype(scale), 3, 3, size(points, 3))
+	Ts = CUDA.zeros(eltype(T), 3, 3, size(points, 3))
 	Ts[1, 1, :] .= scale
 	Ts[1, 3, :] .= -scale .* μ[1, :]
 	Ts[2, 2, :] .= scale
@@ -105,11 +113,38 @@ function compute_T(points)
 	return Ts
 end
 
+# Overload for variable-sized points (vector of matrices)
+function compute_T(points_arr::Vector{<:Matrix})
+	n_views = length(points_arr)
+	T = eltype(points_arr[1])
+	μ = zeros(T, 2, n_views)
+	scale = zeros(T, n_views)
+
+	for (idx, pts) in enumerate(points_arr)
+		# Compute mean and scale on GPU
+		μ[:, idx] .= vec(mean(pts, dims = 2))  # 2-element vector
+		centered = pts .- view(μ, :, idx) # using view to avoid copying
+		scale[idx] = sqrt(2.0f0) / mean(sqrt.(sum(centered .^ 2, dims = 1)))
+	end
+
+	μ = CuArray(μ)
+	scale = CuArray(scale)
+
+	Ts = CUDA.zeros(T, 3, 3, n_views)
+	Ts[1, 1, :] .= scale
+	Ts[1, 3, :] .= -scale .* μ[1, :]
+	Ts[2, 2, :] .= scale
+	Ts[2, 3, :] .= -scale .* μ[2, :]
+	Ts[3, 3, :] .= 1.0f0
+
+	return Ts
+end
+
 # function to compute the triangulation of points given camera matrices and points
-# points is a matched 3D array of points, where the first dimension is the x, y, z coordinates,
+# points is a matched 3D array of points, where the first dimension is the x, y coordinates,
 # 												the second dimension is the number of points, 
 # 												the third dimension same point in different views
-# points[:, i, j] = [x, y, z] is the i-th point to be triangulated in the j-th view
+# points[:, i, j] = [x, y] is the i-th point to be triangulated in the j-th view
 # Ks is a vector of camera matrices, Rs is a vector of rotation matrices, ts is a vector of translation vectors
 function triangulate_batched(Ks, Rs, ts, points)
 	N = size(points, 2) # number of points
@@ -144,6 +179,57 @@ function triangulate_batched(Ks, Rs, ts, points)
 	end
 
 	return collect(triangulated_points)
+end
+
+# Overload for variable-sized points (vector of matrices) with Hungarian assignments
+function triangulate_batched(Ks, Rs, ts, points::Vector{<:Matrix}, assignments::Vector{<:AbstractVector})
+	n_views = length(points)
+	@assert length(assignments) == n_views "Need n-1 assignments for n views"
+
+	Ts = compute_T(points) # CUDA array of normalization matrices
+
+	# Compute P on CPU, transfer once, multiply with GPU Ts
+	Ps_norm_vec = [view(Ts,:,:,i) * CuArray(Ks[i] * hcat(Rs[i][:, :], ts[i])) for i in 1:n_views]
+
+	# Pre-compute normalized points
+	points_norm_vec = Vector{CuArray{Float32, 2}}(undef, n_views)
+	for i in 1:n_views
+		n_pts = size(points[i], 2)
+		pts_h = CUDA.ones(Float32, 3, n_pts)
+		pts_h[1:2, :] .= CuArray(points[i])
+		points_norm_vec[i] = view(Ts,:,:,i) * pts_h
+	end
+
+	# Store triangulated results for each pair
+	reconstructed_points = Vector{Matrix{Float32}}(undef, n_views)
+
+	for view1_idx in 1:n_views
+		view2_idx = view1_idx % n_views + 1
+
+		# Get assignments for this pair
+		# mask invalid assignments
+		assign_masked = map(x -> x < 1 ? 1 : x, assignments[view1_idx])
+
+		println("$view1_idx to $view2_idx:")
+		# Triangulate this pair using pre-computed normalized data
+		triangulated = triangulate_pair(
+			Ps_norm_vec[view1_idx],
+			Ps_norm_vec[view2_idx],
+			view(points_norm_vec[view1_idx], :, :),
+			view(points_norm_vec[view2_idx], :, assign_masked),
+			view(Ts,:,:,view1_idx),
+			view(Ts,:,:,view2_idx),
+		)
+
+		triangulated = collect(triangulated)
+		triangulated[:, assignments[view1_idx] .< 1] .= NaN
+		# println("View $view1_idx to $view2_idx: Triangulated size: ", size(triangulated))
+		# println(collect(triangulated))
+
+		reconstructed_points[view1_idx] = triangulated
+	end
+
+	return reconstructed_points
 end
 
 # function to triangulate a pair of points given the camera matrices and points
@@ -277,7 +363,7 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 		else
 			# datafile is a tuple/named tuple: (ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
 			ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = datafile
-			K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+			K1, d1, R1, t1 = extract_matrices(cams[view], view, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
 		end
 		push!(K, K1)
 		push!(d, d1)
@@ -285,51 +371,68 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 		push!(t, t1)
 	end
 
+	K = OffsetArray(K, firstindex(points):lastindex(points))
+	d = OffsetArray(d, firstindex(points):lastindex(points))
+	R = OffsetArray(R, firstindex(points):lastindex(points))
+	t = OffsetArray(t, firstindex(points):lastindex(points))
+
 	# distances are stored in a 3D array,
 	# each layer (third dimension) i contains the 3D distances between points in view[i] (row) and view[i+1] (column)
 
-	sizes = size.(points, 2) # also potentially offset if points are offset in indexing
-	distances = similar(points, Matrix{Float32})
-	for i in eachindex(points)
-		next_i = (i - firstindex(points) + 1) % length(points) + firstindex(points)
-		println("View-pairs ($i, $next_i) with sizes ($(sizes[i]), $(sizes[next_i]))")
-	end
-	pwise_max_sizes = [maximum([sizes[i], sizes[(i-firstindex(sizes)+1)%length(sizes)+firstindex(sizes)]]) for i in eachindex(sizes)]
-	for view1 in eachindex(points)
-		view2 = (view1 - firstindex(points) + 1) % length(points) + firstindex(points)
-		local_distances = zeros(Float32, pwise_max_sizes[view1], pwise_max_sizes[view1])
-		for i in axes(points[view1], 2)
-			for j in axes(points[view2], 2)
-				local_distances[i, j] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[view1][:, i], points[view2][:, j])
-			end
+sizes = size.(points, 2) # also potentially offset if points are offset in indexing
+distances = similar(points, Matrix{Float32})
+pwise_max_sizes = [maximum([sizes[i], sizes[(i-firstindex(sizes)+1)%length(sizes)+firstindex(sizes)]]) for i in eachindex(sizes)]
+for i in eachindex(points)
+	next_i = (i - firstindex(points) + 1) % length(points) + firstindex(points)
+	# println("View-pairs ($i, $next_i) with sizes ($(sizes[i]), $(sizes[next_i]): $(pwise_max_sizes[i]))")
+end
+for view1 in eachindex(points)
+	view2 = (view1 - firstindex(points) + 1) % length(points) + firstindex(points)
+	local_distances = zeros(Float32, size(points[view1], 2), size(points[view2], 2))
+	for i in axes(points[view1], 2)
+		for j in axes(points[view2], 2)
+			local_distances[i, j] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[view1][:, i], points[view2][:, j])
 		end
-		distances[view1] = fill(2*maximum(local_distances), pwise_max_sizes[view1], pwise_max_sizes[view1])
-		distances[view1][begin:(begin+size(points[view1], 2)-1), begin:(begin+size(points[view2], 2)-1)] = local_distances
 	end
+	distances[view1] = fill(2*maximum(local_distances), pwise_max_sizes[view1], pwise_max_sizes[view1])
+	distances[view1][begin:(begin+size(points[view1], 2)-1), begin:(begin+size(points[view2], 2)-1)] = local_distances
+end
 
-	assignments = []
-	for view in axes(points, 3)
-		assignment, _ = hungarian(distances[view])
-		push!(assignments, assignment)
-	end
+assignments = Vector{Vector{Int}}()
+for view in eachindex(points)
+	assignment, _ = hungarian(distances[view])
+	push!(assignments, assignment)
+end
 
-	cumulative_assignments = zeros(Int, size(points, 2), size(points, 3) + 1)
-	cumulative_assignments[:, 1] = 1:size(points, 2)
-	for view in axes(points, 3)
-		cumulative_assignments[:, view+1] = assignments[view][cumulative_assignments[:, view]]
-	end
-	cumulative_assignments = cumulative_assignments[:, (begin+1):end]
+assignments .= [
+	# begin
+		# println("$i -- $((i+1) % length(points)): $(i+firstindex(points)-1) --- $(i%length(points)+firstindex(points))")
+		map(x ->
+				x <= size(
+					points[i%length(points)+firstindex(points)], 2) ?
+				x : -1,
+			a[1:size(points[i+firstindex(points)-1], 2)],
+		)
+	# end
+	for (i, a) in enumerate(assignments)
+]
 
-	matched_points = copy(points)
-	for view in axes(points, 3)
-		matched_points[:, :, view] = points[:, cumulative_assignments[:, view], view]
-	end
+	# cumulative_assignments = zeros(Int, size(points, 2), size(points, 3) + 1)
+	# cumulative_assignments[:, 1] = 1:size(points, 2)
+	# for view in axes(points, 3)
+	# 	cumulative_assignments[:, view+1] = assignments[view][cumulative_assignments[:, view]]
+	# end
+	# cumulative_assignments = cumulative_assignments[:, (begin+1):end]
 
-	reconstructed_points = zeros(Float32, 3, size(points, 2), size(points, 3))
+	# matched_points = copy(points)
+	# for view in axes(points, 3)
+	# 	matched_points[:, :, view] = points[:, cumulative_assignments[:, view], view]
+	# end
 
-	reconstructed_points[:, :, begin:(end-1)] = triangulate_batched(K, R, t, matched_points)
+	reconstructed_points = triangulate_batched(parent(K), parent(R), parent(t), parent(points), assignments)
+	reconstructed_points = OffsetArray(reconstructed_points, firstindex(points):lastindex(points))
 
-	return distances[begin:(end-1)], cumulative_assignments[:, begin:(end-1)], reconstructed_points[:, begin:(end-1), :]
+	return distances, OffsetArray(assignments, firstindex(points):lastindex(points)), reconstructed_points
 end
 
 function plotReconstructedPoints(points::AbstractMatrix)

@@ -28,7 +28,7 @@ function getGPUElements(
 				push!(DoGo_gpu_prev, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				push!(DoGo_gpu, [CUDA.zeros(Float32, cld(prev_mid_size[1], 2^(octave - 1)), cld(prev_mid_size[2], 2^(octave - 1)))])
 				if octave == 1
-					XY_gpu = CuArray([potential_blob() for i in 1:ceil(Integer, 0.0128*height*width/4)])
+					XY_gpu = CuArray([potential_blob() for i in 1:ceil(Integer, 0.0128*height*width/1)])
 				end
 			else
 				push!(out_gpu[octave], CUDA.zeros(Float32, cld(height, (2^(octave - 1))), cld(width, (2^(octave - 1)))))

@@ -55,6 +55,23 @@ function extract_matrices(cam, frame_name::String, ret_arr, mtx_arr, dist_arr, r
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	frame = findfirst(x -> x == frame_name, filenames[cam])
 	if isnothing(frame)
+		frame = findfirst(x -> parse(Int, x) == parse(Int, frame_name), filenames[cam])
+	end
+	if isnothing(frame)
+		println("Frame not found")
+		return nothing
+	end
+	frame = frame[1]
+	return extract_matrices(cam, frame, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr)
+end
+
+function extract_matrices(cam, frame_name::Integer, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
+	frame = findfirst(x -> x == frame_name, filenames[cam])
+	if isnothing(frame)
+		frame = findfirst(x -> parse(Int, x) == frame_name, filenames[cam])
+	end
+	if isnothing(frame)
 		println("Frame not found")
 		return nothing
 	end
@@ -193,18 +210,43 @@ function videoToFrames(file; path = nothing, dir_name = nothing, filename = noth
 	end
 end
 
-function getFrame(v::VideoIO.VideoReader, frame, fps = 25)
+function getFrame(v::VideoIO.VideoReader, frame; fps = 25)
 	seek(v, frame/fps)
 	return read(v)
 end
 
-function getFrame(v::String, frame, fps = 25)
+function getFrame(v::String, frame; fps = 25)
 	v = VideoIO.openvideo(v)
 	seek(v, frame/fps)
 	return read(v)
 end
 
-function __calibrateCamera(py_img, filename, count, camera, i, cb_grid, objp, objpoints, imgpoints, filenames; criteria = nothing, save = false, ret_py = false, debug = false, cv = nothing, np = nothing, target_dir = nothing, win_size = (11, 11))
+function time2String(time::Float64; digits = 2, mdigits = 2)
+	minutes = floor(Int, time / 60)
+	seconds = floor(Int, time % 60)
+	milliseconds = floor(Int, (time - floor(time)) * 10^digits)
+	return "$(lpad(string(minutes), mdigits, '0')):$(lpad(string(seconds), 2, '0')).$(lpad(string(milliseconds), digits, '0'))"
+end
+
+function __calibrateCamera(
+	py_img,
+	filename,
+	count,
+	camera,
+	i,
+	cb_grid,
+	objp,
+	objpoints,
+	imgpoints,
+	filenames; criteria = nothing,
+	save = false,
+	ret_py = false,
+	debug = false,
+	cv = nothing,
+	np = nothing,
+	target_dir = nothing,
+	win_size = (11, 11),
+)
 	if isnothing(cv)
 		cv = pyimport("cv2")
 	end
@@ -372,9 +414,6 @@ function calibrateCamera(
 		filenames[camera] = Vector{String}()
 		objpoints = []
 		imgpoints = []
-		# objpoints_local = [Vector{Any}() for _ in 1:Threads.nthreads()]
-		# imgpoints_local = [Vector{Any}() for _ in 1:Threads.nthreads()]
-		# filenames_local = [Vector{String}() for _ in 1:Threads.nthreads()]
 		jl_img = nothing
 		if debug
 			if from_video
@@ -413,7 +452,7 @@ function calibrateCamera(
 					jl_img = read(f)
 					if (frame_number - current_start_frame) % current_stride == 0
 						if debug && verbosity >= 1
-							print("Processing: Frame $(frame_number)($count)...")
+							print("Processing: Frame $(frame_number)($count) - $(time2String(frame_number / fps; digits = 2))...")
 						end
 						jl_img = Gray.(jl_img) .* 255.0
 						if invert
@@ -455,7 +494,7 @@ function calibrateCamera(
 			catch e
 				println("Error reading video: ", e)
 			end
-			jl_img = Gray.(getFrame(f, 25, fps))
+			jl_img = Gray.(getFrame(f, 25; fps = fps))
 			for file in vcat(
 				glob("*.JPG", target_dir * string(i)),
 				glob("*.jpg", target_dir * string(i)),
@@ -503,47 +542,9 @@ function calibrateCamera(
 					catch
 						continue
 					end
-					# ret, corners = cv.findChessboardCorners(py_img, cb_grid, nothing)
-
-					# if pyconvert(Bool, ret)
-					# 	println(" success ✅")
-
-					# 	# Threads.atomic_add!(count, 1)
-					# 	count += 1
-
-					# 	push!(objpoints, np.array(objp'))
-					# 	corners = cv.cornerSubPix(cv.cvtColor(py_img, cv.COLOR_BGR2GRAY), corners, (11, 11), (-1, -1), criteria)
-					# 	push!(imgpoints, corners)
-
-					# 	# push!(objpoints_local[tid], np.array(objp'))
-					# 	# push!(imgpoints_local[tid], corners)
-					# 	# push!(filenames_local[tid], filename)
-
-					# 	cv.drawChessboardCorners(py_img, cb_grid, corners, ret)
-					# 	# count += 1
-					# 	# filename without extension
-					# 	if !isdir(target_dir * string(i) * "/corners")
-					# 		mkdir(target_dir * string(i) * "/corners")
-					# 	end
-					# 	push!(filenames[camera], filename)
-					# 	if save
-					# 		println("\t... saving to $(target_dir * string(i) * "/corners/$(splitext(filename)[1])_corners$(splitext(filename)[2])")")
-					# 		try
-					# 			cv.imwrite(target_dir * string(i) * "/corners/$(splitext(filename)[1])_corners$(splitext(filename)[2])", py_img)
-					# 		catch e
-					# 			println("Error saving image: ", e)
-					# 		end
-					# 	end
-					# else
-					# 	println(" failed ❌")
-					# end
 				end
 			end
 		end
-
-		# objpoints = reduce(vcat, objpoints_local)
-		# imgpoints = reduce(vcat, imgpoints_local)
-		# append!(filenames[camera], reduce(vcat, filenames_local))
 		ret_cameras[camera] = rets
 
 		if jl_img == nothing
@@ -616,16 +617,6 @@ function calibrateCamera(
 					criteria = criteria)
 			end
 		end
-		# if sum(rets) == length(rets)
-		# 	# all images were successful
-		# 	println(" ✅!")
-		# elseif sum(rets) > length(rets) / 2
-		# 	# more than half were successful
-		# 	println(" ⚠️!")
-		# else
-		# 	# less than half were successful
-		# 	println(" ❌!")
-		# end
 
 		if refineLM
 			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
@@ -685,29 +676,6 @@ function calibrateCamera(
 		push!(reproj_err_arr, reproj_err)
 	end
 
-	# println("typeof(tvecs_arr) = $(typeof(tvecs_arr))")
-	# println("typeof(tvecs_arr[1]) = $(typeof(tvecs_arr[1]))")
-	# println("tvecs_arr[1][1] = $(tvecs_arr[1][1]) (of type $(typeof(tvecs_arr[1][1])))")
-	# count = 0
-	# i = 1
-	# j = 0
-	# 	try
-	# 	for y in tvecs_arr
-	# 		println("size of tvecs_arr[$i] = $(size(y))")
-	# 		i+=1
-
-	# 	# 	for x in y
-	# 	# 		println("($j, $i): $x --> $(pyconvert(Matrix, x))\n")
-	# 	# 		i+=1
-	# 	# 		j+=1
-	# 	# 		# if count > 3
-	# 	# 		# 	break
-	# 	# 		# end
-	# 	# 	end
-	# 	end
-	# catch
-	# end
-
 	# ret_arr::Vector{Float64}.
 	# Usage: ret_arr[i]::Float64 = calibration error for camera i 
 	jl_ret_arr = [pyconvert(Float64, x) for x in ret_arr]
@@ -755,10 +723,10 @@ function calibrate(
 	num_images = [30, Inf],
 	from_video = false,
 	stride = 1,
-	start_frame = 0,
-	end_frame = nothing,
-	start_frame_stage2 = nothing,
-	end_frame_stage2 = nothing,
+	start_stage1 = 0,
+	end_stage1 = nothing,
+	start_stage2 = nothing,
+	end_stage2 = nothing,
 	win_size = (11, 11),
 	invert = false,
 	vfile_name = nothing,
@@ -770,7 +738,8 @@ function calibrate(
 	PnP = false,
 	ransac = false,
 	refineLM = false,
-	fps = 25)
+	fps = 25,
+)
 	properties = Dict([
 		("target_dir", target_dir),
 		("num_cameras", num_cameras),
@@ -781,53 +750,66 @@ function calibrate(
 
 	# Stage 1: Intrinsic calibration parameters
 	default_end_frame = 10 * fps  # Frame at 10 seconds
-	end_frame = isnothing(end_frame) ? default_end_frame : end_frame
+	end_stage1 = isnothing(end_stage1) ? default_end_frame : end_stage1
 
-	if end_frame isa AbstractArray
-		@assert length(end_frame) == length(num_cameras) "end_frame array length must match number of cameras"
+	# Validation of stage 1 and stage 2 parameters
+	begin
+		if end_stage1 isa AbstractArray
+			@assert length(end_stage1) == length(num_cameras) "end_stage1 array length must match number of cameras"
+		end
+
+		if stride isa AbstractArray
+			@assert length(stride) == length(num_cameras) "Stride array length must match number of cameras"
+		end
+
+		if start_stage1 isa AbstractArray
+			@assert length(start_stage1) == length(num_cameras) "start_stage1 array length must match number of cameras"
+		end
 	end
-
-	if stride isa AbstractArray
-		@assert length(stride) == length(num_cameras) "Stride array length must match number of cameras"
-	end
-
-	if start_frame isa AbstractArray
-		@assert length(start_frame) == length(num_cameras) "start_frame array length must match number of cameras"
-	end
-
 	# Calculate stage 1 stride based on end_frame
-	stage1_stride = floor.(Int, (end_frame .- start_frame) ./ num_images[1])
+	stage1_stride = floor.(Int, (end_stage1 .- start_stage1) ./ num_images[1])
 
 	# Stage 2: Extrinsic (PnP) calibration parameters
 	# Default to stage 1 values if not specified
-	start_frame_stage2 = isnothing(start_frame_stage2) ? 0 : start_frame_stage2
-	end_frame_stage2 = isnothing(end_frame_stage2) ? Inf : end_frame_stage2
-	# print("Stage 1: Performing intrinsic calibration on ")
-	_, _, _, _, _, _, _, _, py_mtx_arr, py_dist_arr =
-		calibrateCamera(
-			target_dir,
-			num_cameras,
-			cb_grid,
-			cb_size,
-			cb_plane;
-			save = false,
-			debug = debug,
-			num_images = num_images[1],
-			stride = stage1_stride,
-			start_frame = start_frame,
-			return_py_intrinsic = true,
-			invert = invert,
-			from_video = from_video,
-			win_size = win_size,
-			# guess_mtx = py_mtx_arr,
-			# guess_dist = py_dist_arr,
-			verbosity = verbosity,
-			RO = RO,
-			# refineLM = false,
-			iFixedPoint = 20 * 3 + 16,
-			fps = fps,
-		)
-	# print("Stage 2: Performing extrinsic calibration on ")
+	start_stage2 = isnothing(start_stage2) ? 0 : start_stage2
+	end_stage2 = isnothing(end_stage2) ? Inf : end_stage2
+
+	if isnothing(guess_mtx) || isnothing(guess_dist)
+		if debug
+			print("Stage 1: Performing intrinsic calibration on ")
+		end
+		_, _, _, _, _, _, _, _, py_mtx_arr, py_dist_arr =
+			calibrateCamera(
+				target_dir,
+				num_cameras,
+				cb_grid,
+				cb_size,
+				cb_plane;
+				save = false,
+				debug = debug,
+				num_images = num_images[1],
+				stride = stage1_stride,
+				start_frame = start_stage1,
+				return_py_intrinsic = true,
+				invert = invert,
+				from_video = from_video,
+				win_size = win_size,
+				# guess_mtx = py_mtx_arr,
+				# guess_dist = py_dist_arr,
+				verbosity = verbosity,
+				RO = RO,
+				# refineLM = false,
+				iFixedPoint = 20 * 3 + 16,
+				fps = fps,
+			)
+	else
+		np = pyimport("numpy")
+		py_mtx_arr = [np.ascontiguousarray(Py(guess_mtx[i])) for i in eachindex(guess_mtx)]
+		py_dist_arr = [np.ascontiguousarray(Py(transpose(i))) for i in eachcol(guess_dist)]
+	end
+	if debug
+		print("Stage 2: Performing extrinsic calibration on ")
+	end
 	if ret_py
 		ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, py =
 			calibrateCamera(
@@ -839,8 +821,8 @@ function calibrate(
 				save = save,
 				debug = debug,
 				num_images = num_images[2],
-				start_frame = start_frame_stage2,
-				end_frame = end_frame_stage2,
+				start_frame = start_stage2,
+				end_frame = end_stage2,
 				ret_py = ret_py,
 				invert = invert,
 				from_video = from_video,
@@ -865,8 +847,8 @@ function calibrate(
 				save = save,
 				debug = debug,
 				num_images = num_images[2],
-				start_frame = start_frame_stage2,
-				end_frame = end_frame_stage2,
+				start_frame = start_stage2,
+				end_frame = end_stage2,
 				ret_py = ret_py,
 				invert = invert,
 				from_video = from_video,

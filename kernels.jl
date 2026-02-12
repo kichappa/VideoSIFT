@@ -36,6 +36,66 @@ end
 # buffH is the height of the buffer including the black apron at the bottom
 # inpH is the height of the image excluding the aprons, after the column kernel
 
+function col_row_kernel(inp, conv, out, height::UInt32, width::UInt32, imgWidth::UInt16, apron::Int8)
+	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
+	threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
+	threads::Int16 = blockDim().x * blockDim().y
+
+	# number of blocks in a column and row, and total number of blocks in the image
+	blocksInACol::UInt16 = cld(height, blockDim().x)
+	blocksInARow::UInt16 = cld(imgWidth, blockDim().y - 2 * apron)
+	blocksInAnImage::UInt32 = UInt32(blocksInACol) * UInt32(blocksInARow)
+
+	# This thread's coordinates in the image
+	thisY::Int16 = (blockNum % blocksInACol) * blockDim().x + threadIdx().x # 1-indexed
+	thisX::Int32 = (blockNum ÷ blocksInAnImage) * imgWidth + fld((blockNum % blocksInAnImage), blocksInACol) * (blockDim().y - 2 * apron) + threadIdx().y - apron # 1-indexed
+
+	data = CuDynamicSharedArray(Float32, threads)
+
+	# fill the shared memory
+	begin
+		if 0 < thisY <= height
+			if 0 < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth
+				thisPX::Int32 = thisY + (thisX - 1) * height
+				@inbounds data[threadNum+1] = @inbounds inp[thisPX]
+			else
+				@inbounds data[threadNum+1] = 0.0
+			end
+		end
+	end
+	sync_threads()
+
+
+	# Column convolution
+	if (0 < thisY <= height) && 
+		(0 < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth) && 
+		(apron < threadIdx().x <= blockDim().x - apron)
+		sum::Float32 = 0.0
+		for i in (-apron):apron
+			sum += @inbounds data[threadNum+1+i] * @inbounds conv[apron+1+i]
+		end
+		@inbounds data[threadNum+1] = sum
+	end
+	sync_threads()
+
+
+	thisIsAComputationThread::Bool =
+		(0 < thisY <= height) && 
+		(0 < thisX - (blockNum ÷ blocksInAnImage) * imgWidth <= imgWidth) && 
+		(apron < threadIdx().y <= blockDim().y - apron) && 
+		(0 < thisX <= width)
+
+	# Row convolution - read from updated shared memory
+	if thisIsAComputationThread
+		sum_row::Float32 = 0.0
+		for i in (-apron):apron
+			sum_row += @inbounds data[threadNum+1+i*blockDim().x] * @inbounds conv[apron+1+i]
+		end
+		@inbounds out[thisY, thisX] = sum_row
+	end
+	return
+end
+
 function row_kernel(inp, conv, out, height::UInt32, width::UInt32, imgWidth::UInt16, apron::Int8)
 	blockNum::UInt32 = blockIdx().x - 1 + (blockIdx().y - 1) * gridDim().x # block number, column major, 0-indexed
 	threadNum::UInt16 = threadIdx().x - 1 + (threadIdx().y - 1) * blockDim().x
@@ -296,7 +356,7 @@ function blobs_2(l, out2, out1, h::UInt32, w::UInt32, imgWidth::UInt16, norm::Fl
 		min_layer1 = min(min_layer1, data1[tN-1+blockDim().x])
 		min_layer1 = min(min_layer1, data1[tN+blockDim().x])
 		min_layer1 = min(min_layer1, data1[tN+1+blockDim().x])
-		
+
 		# Max of all 9 data2 neighbors - flattened chain
 		max_layer23 = data2[tN-1-blockDim().x]
 		max_layer23 = max(max_layer23, data2[tN-blockDim().x])
@@ -307,7 +367,7 @@ function blobs_2(l, out2, out1, h::UInt32, w::UInt32, imgWidth::UInt16, norm::Fl
 		max_layer23 = max(max_layer23, data2[tN-1+blockDim().x])
 		max_layer23 = max(max_layer23, data2[tN+blockDim().x])
 		max_layer23 = max(max_layer23, data2[tN+1+blockDim().x])
-		
+
 		# continue with data3
 		max_layer23 = max(max_layer23, data3[tN-1-blockDim().x])
 		max_layer23 = max(max_layer23, data3[tN-blockDim().x])
@@ -329,7 +389,7 @@ function blobs_2(l, out2, out1, h::UInt32, w::UInt32, imgWidth::UInt16, norm::Fl
 		min_layer23 = min(min_layer23, data2[tN-1+blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN+blockDim().x])
 		min_layer23 = min(min_layer23, data2[tN+1+blockDim().x])
-		
+
 		# continue with data3
 		min_layer23 = min(min_layer23, data3[tN-1-blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN-blockDim().x])
@@ -341,7 +401,7 @@ function blobs_2(l, out2, out1, h::UInt32, w::UInt32, imgWidth::UInt16, norm::Fl
 		min_layer23 = min(min_layer23, data3[tN+blockDim().x])
 		min_layer23 = min(min_layer23, data3[tN+1+blockDim().x])
 
-		max_layer1 = max(max_layer1, max_layer23) 
+		max_layer1 = max(max_layer1, max_layer23)
 		min_layer1 = min(min_layer1, min_layer23)
 
 		data2tN = data2[tN]
@@ -372,7 +432,7 @@ function blobs_2(l, out2, out1, h::UInt32, w::UInt32, imgWidth::UInt16, norm::Fl
 		min_layer1 = min(min_layer1, data4[tN+blockDim().x])
 		min_layer1 = min(min_layer1, data4[tN+1+blockDim().x])
 
-		max_layer1 = max(max_layer1, max_layer23) 
+		max_layer1 = max(max_layer1, max_layer23)
 		min_layer1 = min(min_layer1, min_layer23)
 
 		data2tN = data3[tN]
@@ -446,11 +506,11 @@ end
 function find_orientations(Os, pointsXY, out, h::UInt32, w::UInt32, counts, radii, bins::Int32, check_count, printcount)
 
 	subset::UInt8 = 1 + # 1-indexed
-			 (blockIdx().x > counts[1]) +
-			 (blockIdx().x > counts[2]) +
-			 (blockIdx().x > counts[3]) +
-			 (blockIdx().x > counts[4]) +
-			 (blockIdx().x > counts[5])
+					(blockIdx().x > counts[1]) +
+					(blockIdx().x > counts[2]) +
+					(blockIdx().x > counts[3]) +
+					(blockIdx().x > counts[4]) +
+					(blockIdx().x > counts[5])
 
 	r::UInt16 = radii[subset]
 
@@ -493,12 +553,12 @@ function find_orientations(Os, pointsXY, out, h::UInt32, w::UInt32, counts, radi
 			dy::Float32 = data[l_threadNum-1] - data[l_threadNum+1]
 			dx::Float32 = data[l_threadNum+(2*r+1+2)] - data[l_threadNum-(2*r+1+2)]
 			# Calculate the gaussian weight and the magnitude of the position and the orientation of the gradient.
-			weight::Float32 = exp(-1f0 * ((x - X)^2 + (y - Y)^2) / (2 * (r * 1)^2)) / (2f0 * pi * (r * 1))
-			magnitude::Float32 = (x - X)^2 + (y - Y)^2 > 0 ? (dx * (X - x) - dy * (Y - y)) / (2 * sqrt(1f0 * (x - X)^2 + (y - Y)^2)) : sqrt(dy^2 + dx^2) / 4
+			weight::Float32 = exp(-1.0f0 * ((x - X)^2 + (y - Y)^2) / (2 * (r * 1)^2)) / (2.0f0 * pi * (r * 1))
+			magnitude::Float32 = (x - X)^2 + (y - Y)^2 > 0 ? (dx * (X - x) - dy * (Y - y)) / (2 * sqrt(1.0f0 * (x - X)^2 + (y - Y)^2)) : sqrt(dy^2 + dx^2) / 4
 			# Calculate the bin number into which the orientation accumulates
-			bin::Int32 = (x - X)^2 + (y - Y)^2 > 0 ? 
-			fld((atan(1f0 * (Y - y), 1f0 * (X - x)) + 2f0 * pi) % (2f0 * pi), 2f0 * pi / bins) + 1 : 
-			fld((atan(dy, dx) + 2f0 * pi) % (2f0 * pi), 2f0 * pi / bins) + 1 # 1-indexed
+			bin::Int32 = (x - X)^2 + (y - Y)^2 > 0 ?
+						 fld((atan(1.0f0 * (Y - y), 1.0f0 * (X - x)) + 2.0f0 * pi) % (2.0f0 * pi), 2.0f0 * pi / bins) + 1 :
+						 fld((atan(dy, dx) + 2.0f0 * pi) % (2.0f0 * pi), 2.0f0 * pi / bins) + 1 # 1-indexed
 
 			CUDA.@atomic orientation[bin] += weight * magnitude
 		end
