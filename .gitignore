@@ -9,6 +9,9 @@ old/assets/videos/*
 # *.png
 *.jld2
 !assets/camera_intrinsics/*.jld2
+assets/sfm/*.png
+assets/sfm/*.mp4
+assets/LoFTR/*.mp4
 
 old/CUDA_Runtime_jll.jl
 old/CUDA_Runtime_jll.jl/*

@@ -19,7 +19,7 @@ blobs = nothing
 begin
 	println("Here we go!")
 
-	cam = 30
+	cam = 22
 	path = "assets/videos/cam$cam"
 	file = vcat(glob("*.mp4", path), glob("*.MP4", path), glob("*.mov", path), glob("*.MOV", path))[1]
 	v = VideoIO.openvideo(file)
@@ -27,8 +27,8 @@ begin
 	println("Let's generate SFM using video $file at $(Float32(fps))hz")
 	calibration_start_time = 0 # seconds
 	calibration_end_time = 7.5  # seconds
-	sfm_start = 18.9 # seconds
-	sfm_end = 19    # seconds
+	sfm_start = 0 # seconds
+	sfm_end = 13.5    # seconds
 
 	sfm_start = Int(round(sfm_start * fps))
 	sfm_end = Int(round(sfm_end * fps))
@@ -41,7 +41,8 @@ begin
 	nImages = 16
 
 	# Start calibration asynchronously
-	@unpack ret_arr, mtx_arr, dist_arr = jldopen("assets/camera_intrinsics/fujifilm_x-s20.jld2")
+	# @unpack ret_arr, mtx_arr, dist_arr = jldopen("assets/camera_intrinsics/fujifilm_x-s20.jld2")
+	mtx_arr, dist_arr = nothing, nothing
 	calibrate_task = @async let
 		start_time = Int(round(calibration_start_time * fps))
 		end_time = Int(round(calibration_end_time * fps))
@@ -55,10 +56,12 @@ begin
 			debug = false,
 			verbosity = 1,
 			from_video = true,
-			# start_stage1 = [start_time],
-			# end_stage1 = [end_time],
-			start_stage2 = [10],
-			end_stage2 = [11],
+			start_stage1 = [start_time],
+			end_stage1 = [end_time],
+			start_stage2 = [sfm_start],
+			end_stage2 = [sfm_end],
+			# start_stage2 = [10],
+			# end_stage2 = [11],
 			num_images = [30, Inf],
 			win_size = (26, 26),
 			return_py_intrinsic = false,
@@ -144,10 +147,12 @@ begin
 
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties = fetch(calibrate_task)
 
-	n_rvecs_arr = Vector{Vector}(undef, 0)
-	push!(n_rvecs_arr, [view(parent(rvecs_arr[1]), :)[1] for i in sfm_start:sfm_end])
-	n_tvecs_arr = Vector{Matrix{Float64}}(undef, 1)
-	n_tvecs_arr[1] = view(tvecs_arr[1], :, fill(1, sfm_end-sfm_start+1))
+	# n_rvecs_arr = Vector{Vector}(undef, 0)
+	# push!(n_rvecs_arr, [view(parent(rvecs_arr[1]), :)[1] for i in sfm_start:sfm_end])
+	# n_tvecs_arr = Vector{Matrix{Float64}}(undef, 1)
+	# n_tvecs_arr[1] = view(tvecs_arr[1], :, fill(1, sfm_end-sfm_start+1))
+	n_rvecs_arr = [parent(rvecs_arr[i]) for i in eachindex(rvecs_arr)]
+	n_tvecs_arr = tvecs_arr
 	filenames[1] = ["$i" for i in sfm_start:sfm_end]
 
 	println("Calibration completed!")
@@ -185,7 +190,17 @@ begin
 	println("Triangulation complete!")
 	# println("Number of views: $(length(reconstructed_points))")
 
-	camera_pos = [reshape(-rvecs_arr[1][i+begin-1] * tvecs_arr[1][:, i], (3, 1)) for i in 1:length(rvecs_arr[1])]
-	visualize_3d_points(camera_pos; filename = "camera_pos")
+	# camera_pos = [reshape(-rvecs_arr[1][i+begin-1] * tvecs_arr[1][:, i], (3, 1)) for i in 1:length(rvecs_arr[1])]
+	# visualize_3d_points(camera_pos; filename = "camera_pos")
+
+	# Visualize blob correspondences for every consecutive frame pair
+	plot_consecutive_blob_correspondences(
+		file,
+		all_blobs,
+		assignments,
+		fps;
+		out_path = "assets/LoFTR/cam$(cam)_blobs_consecutive_$(sfm_start)-$(sfm_end-1).mp4",
+		filter_invalid = true,
+	)
 
 end

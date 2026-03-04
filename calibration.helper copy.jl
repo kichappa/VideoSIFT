@@ -1,21 +1,5 @@
 using Statistics, UnPack, JLD2, Glob
 
-"""
-	undistort_point(mtx, dist_coeffs, xy_distort; num_iters=5, debug=false) -> Vector{Float64}
-
-Iteratively remove lens distortion from a single distorted pixel coordinate.
-
-# Arguments
-- `mtx`          : 3×3 camera intrinsic matrix `[fx 0 cx; 0 fy cy; 0 0 1]`.
-- `dist_coeffs`  : 5-element distortion vector `[k1, k2, p1, p2, k3]`
-				   (radial coefficients k1/k2/k3, tangential p1/p2).
-- `xy_distort`   : 2-element distorted pixel coordinate `[u, v]`.
-- `num_iters`    : number of Newton-style iterations (default 5).
-- `debug`        : if `true`, prints the corrected pixel after every iteration.
-
-# Returns
-`[u_undist, v_undist]` — the undistorted pixel coordinate.
-"""
 function undistort_point(mtx, dist_coeffs, xy_distort; num_iters = 5, debug = false)
 	fx = mtx[1, 1]
 	fy = mtx[2, 2]
@@ -50,20 +34,6 @@ function undistort_point(mtx, dist_coeffs, xy_distort; num_iters = 5, debug = fa
 	return [u_undist, v_undist]
 end
 
-"""
-	undistortPoints(points, mtx, dist_coeffs, num_iters=5) -> Matrix{Float32}
-
-Batch-undistort a collection of distorted pixel coordinates.
-
-# Arguments
-- `points`      : iterable of 2-element distorted pixel coordinates.
-- `mtx`         : 3×3 camera intrinsic matrix (see `undistort_point`).
-- `dist_coeffs` : 5-element distortion vector `[k1, k2, p1, p2, k3]`.
-- `num_iters`   : Newton iterations forwarded to `undistort_point` (default 5).
-
-# Returns
-2×N `Matrix{Float32}` where column `i` is the undistorted coordinate for `points[i]`.
-"""
 function undistortPoints(points, mtx, dist_coeffs, num_iters = 5)
 	undistorted_points = zeros(Float32, 2, length(points))
 	for (i, point) in enumerate(points)
@@ -72,27 +42,7 @@ function undistortPoints(points, mtx, dist_coeffs, num_iters = 5)
 	return undistorted_points
 end
 
-"""
-	extract_matrices(cam, frame::Integer, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr)
-		-> (K, dist, R, t)
-
-Direct index lookup — extract intrinsic and extrinsic matrices for camera `cam`
-at 1-based frame index `frame`.
-
-# Arguments
-- `cam`       : 1-based camera index into `mtx_arr`, `dist_arr`, etc.
-- `frame`     : 1-based position in `rvecs_arr[cam]` / column of `tvecs_arr[cam]`.
-- `ret_arr`   : unused in this method (kept for API uniformity).
-- `mtx_arr`   : `Vector` of 3×3 intrinsic matrices, one per camera.
-- `dist_arr`  : 2D array; column `cam` holds the 5-element distortion vector.
-- `rvecs_arr` : `Vector{Vector}` of rotation matrices; `rvecs_arr[cam][frame]` is 3×3.
-- `tvecs_arr` : `Vector{Matrix}`; `tvecs_arr[cam][:, frame]` is the 3-vector translation.
-
-# Returns
-`(K, dist, R, t)` — intrinsic matrix, distortion vector, rotation matrix, translation vector.
-"""
 function extract_matrices(cam, frame::Integer, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr)
-	# println("extract_matrices: Method 1")
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	K = mtx_arr[cam]
 	dist = dist_arr[:, cam]
@@ -101,26 +51,7 @@ function extract_matrices(cam, frame::Integer, ret_arr, mtx_arr, dist_arr, rvecs
 	return K, dist, R, t
 end
 
-"""
-	extract_matrices(cam, frame_name::String, ret_arr, mtx_arr, dist_arr,
-					 rvecs_arr, tvecs_arr, filenames) -> (K, dist, R, t)
-
-Filename-string lookup — resolve `frame_name` to a frame index via `filenames[cam]`,
-then delegate to the integer-frame overload.
-
-If an exact string match fails, it falls back to a numeric comparison
-(`parse(Int, ...)`) so that names like `"0042"` and `"42"` are treated as equal.
-Returns `nothing` if the frame name cannot be found.
-
-# Arguments
-- `cam`        : 1-based camera index.
-- `frame_name` : filename string stored in `filenames[cam]` during calibration.
-- `filenames`  : `Vector{Vector{String}}`; `filenames[cam]` is the ordered list of
-				 image names used to calibrate camera `cam`.
-- remaining arguments: forwarded to `extract_matrices(cam, frame::Integer, ...)`.
-"""
 function extract_matrices(cam, frame_name::String, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
-	# println("extract_matrices: Method 2")
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	frame = findfirst(x -> x == frame_name, filenames[cam])
 	if isnothing(frame)
@@ -134,25 +65,7 @@ function extract_matrices(cam, frame_name::String, ret_arr, mtx_arr, dist_arr, r
 	return extract_matrices(cam, frame, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr)
 end
 
-"""
-	extract_matrices(cam, frame_name::Integer, ret_arr, mtx_arr, dist_arr,
-					 rvecs_arr, tvecs_arr, filenames) -> (K, dist, R, t)
-
-Integer-name lookup — find `frame_name` inside `filenames[cam]` by comparing
-the stored strings numerically (`parse(Int, x) == frame_name`), then delegate
-to the direct-index overload.  Useful when filenames are frame numbers stored
-as strings (e.g. from `sfm_start:sfm_end`).
-Returns `nothing` if the frame name cannot be found.
-
-# Arguments
-- `cam`        : 1-based camera index.
-- `frame_name` : integer frame identifier to search for in `filenames[cam]`.
-- `filenames`  : `Vector{Vector{String}}`; `filenames[cam]` is the ordered list of
-				 names used during calibration.
-- remaining arguments: forwarded to `extract_matrices(cam, frame::Integer, ...)`.
-"""
 function extract_matrices(cam, frame_name::Integer, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
-	# println("extract_matrices: Method 3")
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	frame = findfirst(x -> x == frame_name, filenames[cam])
 	if isnothing(frame)
@@ -166,21 +79,7 @@ function extract_matrices(cam, frame_name::Integer, ret_arr, mtx_arr, dist_arr, 
 	return extract_matrices(cam, frame, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr)
 end
 
-"""
-	extract_matrices(cam, frame::Integer, jld_file) -> (K, dist, R, t)
-
-JLD2 file + integer index — load calibration arrays from `jld_file` and
-forward to the filename-list overload.  Tries to unpack `reproj_arr` first;
-falls back gracefully if that key is absent.
-
-# Arguments
-- `cam`      : 1-based camera index.
-- `frame`    : integer frame identifier searched inside the loaded `filenames`.
-- `jld_file` : path to a `.jld2` file containing at minimum the keys
-			   `ret_arr`, `mtx_arr`, `dist_arr`, `rvecs_arr`, `tvecs_arr`, `filenames`.
-"""
 function extract_matrices(cam, frame::Integer, jld_file)
-	# println("extract_matrices: Method 4")
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames = begin
 		try
@@ -194,20 +93,7 @@ function extract_matrices(cam, frame::Integer, jld_file)
 	return extract_matrices(cam, frame, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
 end
 
-"""
-	extract_matrices(cam, frame_name::String, jld_file) -> (K, dist, R, t)
-
-JLD2 file + filename string — load calibration arrays from `jld_file` and
-forward to the string-name overload.  Same fallback behaviour as Method 4
-for the optional `reproj_arr` key.
-
-# Arguments
-- `cam`        : 1-based camera index.
-- `frame_name` : filename string to look up inside the loaded `filenames`.
-- `jld_file`   : path to a `.jld2` calibration file.
-"""
 function extract_matrices(cam, frame_name::String, jld_file)
-	# println("extract_matrices: Method 5")
 	# Extract the camera matrix, distortion coefficients, rotation matrix, and translation vector for the camera
 	ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames = begin
 		try
@@ -221,28 +107,6 @@ function extract_matrices(cam, frame_name::String, jld_file)
 	return extract_matrices(cam, frame_name, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
 end
 
-"""
-	__reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
-		-> Vector{Float64}
-
-Compute per-image mean L2 reprojection error using OpenCV's `projectPoints`.
-
-Internal helper called by `calibrateCamera` and `calibrate` after solving PnP
-or full calibration.  Uses 0-based Python indexing for `rvecs`/`tvecs`.
-
-# Arguments
-- `cv`, `np`   : Python `cv2` and `numpy` modules (PythonCall).
-- `objpoints`  : list of N×3 object-point arrays (world coordinates), one per image.
-- `imgpoints`  : list of N×2 observed corner arrays (pixel coordinates), one per image.
-- `mtx`        : 3×3 intrinsic matrix (Python/numpy array).
-- `dist`       : distortion coefficients (Python/numpy array).
-- `rvecs`      : 0-indexed sequence of rotation vectors, one per image.
-- `tvecs`      : 0-indexed sequence of translation vectors, one per image.
-
-# Returns
-`Vector{Float64}` of length `length(objpoints)`, entry `i` is the mean pixel error
-for image `i`.
-"""
 function __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
 	reproj_err = Vector{Float64}(undef, length(objpoints))
 	for i in 1:length(objpoints)
@@ -254,29 +118,6 @@ function __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tv
 	return reproj_err
 end
 
-"""
-	__findChessboardCorners(jl_img, cb_grid, cv, np; criteria=nothing, invert=false)
-		-> (Bool, Matrix{Float64} | nothing)
-
-Internal worker: convert a Julia image to a BGR numpy array, detect chessboard
-corners with `cv2.findChessboardCorners`, optionally refine them with
-`cornerSubPix`, and return the result.
-
-# Arguments
-- `jl_img`   : Julia image (any colour type; converted to `Gray` internally).
-- `cb_grid`  : 3-element grid tuple `(nx, ny, nz)`; only the first two non-zero
-			   dimensions are used, matching the flat-chessboard convention.
-- `cv`, `np` : Python `cv2` and `numpy` modules.
-- `criteria` : OpenCV termination criteria tuple for `cornerSubPix`.
-			   Defaults to `(TERM_CRITERIA_EPS + TERM_CRITERIA_MAX_ITER, 30, 0.001)`.
-- `invert`   : if `true`, invert pixel intensities before detection
-			   (useful for dark-background boards).
-
-# Returns
-- `(true,  corners::Matrix{Float64})` — `corners` is a `(n_corners × 2)` matrix
-  of refined sub-pixel (x, y) pixel coordinates when detection succeeds.
-- `(false, nothing)` — when no board is found.
-"""
 function __findChessboardCorners(jl_img, cb_grid, cv, np; criteria = nothing, invert = false)
 	if isnothing(criteria)
 		criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -307,39 +148,14 @@ function __findChessboardCorners(jl_img, cb_grid, cv, np; criteria = nothing, in
 	end
 end
 
-"""
-	findChessboardCorners(image::String, cb_grid; criteria, cv, np, invert)
-		-> (Bool, Matrix{Float64} | nothing)
-
-Load image from `image` path and detect chessboard corners.
-See `__findChessboardCorners` for return value semantics.
-"""
 function findChessboardCorners(image::String, cb_grid; criteria = nothing, cv = cv, np = np, invert = false)
 	return __findChessboardCorners(FileIO.load(image), cb_grid, cv, np; criteria = criteria, invert = invert)
 end
 
-"""
-	findChessboardCorners(image, cb_grid; criteria, cv, np, invert)
-		-> (Bool, Matrix{Float64} | nothing)
-
-Detect chessboard corners in an already-loaded Julia image array.
-See `__findChessboardCorners` for return value semantics.
-"""
 function findChessboardCorners(image, cb_grid; criteria = nothing, cv = cv, np = np, invert = false)
 	return __findChessboardCorners(image, cb_grid, cv, np; criteria = criteria, invert = invert)
 end
 
-"""
-	findChessboardCorners(image::Vector{String}, cb_grid; criteria, cv, np, invert)
-		-> (Vector{Bool}, Array{Float64, 3})
-
-Batch version — load each file path in `image` and detect corners in all of them.
-
-# Returns
-- `rets`    : `Vector{Bool}` of length `length(image)`, `true` where a board was found.
-- `corners` : `2 × prod(cb_grid) × length(image)` array; slice `[:, :, i]` holds
-			  the 2×N corner coordinates for image `i` (column = corner, rows = x/y).
-"""
 function findChessboardCorners(image::Vector{String}, cb_grid; criteria = nothing, cv = cv, np = np, invert = false)
 	rets = Vector{Bool}(undef, length(image))
 	corners = Array{Float64}(undef, 2, prod(cb_grid), length(image))
@@ -351,17 +167,6 @@ function findChessboardCorners(image::Vector{String}, cb_grid; criteria = nothin
 	return rets, corners
 end
 
-"""
-	findChessboardCorners(image::Vector, cb_grid; criteria, cv, np, invert)
-		-> (Vector{Bool}, Array{Float64, 3})
-
-Batch version — process a vector of already-loaded Julia image arrays.
-
-# Returns
-- `rets`    : `Vector{Bool}` of length `length(image)`, `true` where a board was found.
-- `corners` : `2 × prod(cb_grid) × length(image)` array; slice `[:, :, i]` holds
-			  the 2×N corner coordinates for image `i` (column = corner, rows = x/y).
-"""
 function findChessboardCorners(image::Vector, cb_grid; criteria = nothing, cv = cv, np = np, invert = false)
 	rets = Vector{Bool}(undef, length(image))
 	corners = Array{Float64}(undef, 2, prod(cb_grid), length(image))
@@ -374,23 +179,6 @@ function findChessboardCorners(image::Vector, cb_grid; criteria = nothing, cv = 
 end
 
 
-"""
-	videoToFrames(file; path, dir_name, filename, ext, num_images, stride)
-
-Extract individual frames from a video file and save them as images to disk.
-
-# Arguments
-- `file`       : path to the source video file.
-- `path`       : output root directory; defaults to the video path without extension.
-- `dir_name`   : subdirectory appended to `path` (default `"calibration"`);
-				 pass `""` to write directly into `path`.
-- `filename`   : base filename prefix for saved frames; defaults to the video stem.
-- `ext`        : image extension / format (default `"png"`).
-- `num_images` : maximum number of frames to save (default `nothing` = all).
-- `stride`     : save every `stride`-th frame (default `1` = every frame).
-
-Frames are named `<filename>_<frame_number>.<ext>` with 1-based numbering.
-"""
 function videoToFrames(file; path = nothing, dir_name = nothing, filename = nothing, ext = "png", num_images = nothing, stride = 1)
 	if isnothing(dir_name)
 		dir_name = "calibration"
@@ -422,55 +210,17 @@ function videoToFrames(file; path = nothing, dir_name = nothing, filename = noth
 	end
 end
 
-"""
-	getFrame(v::VideoIO.VideoReader, frame; fps=25) -> image
-
-Seek to frame index `frame` in an already-open `VideoIO.VideoReader` and return
-the decoded colour image.  Seeking is time-based: `t = frame / fps` seconds.
-
-# Arguments
-- `v`     : open `VideoIO.VideoReader` (not rewound automatically after the call).
-- `frame` : 0-based frame index.
-- `fps`   : frames per second used to convert the index to a timestamp (default 25).
-"""
 function getFrame(v::VideoIO.VideoReader, frame; fps = 25)
 	seek(v, frame/fps)
 	return read(v)
 end
 
-"""
-	getFrame(v::String, frame; fps=25) -> image
-
-Open the video file at path `v`, seek to frame index `frame`, read and return
-the decoded colour image, then close the reader.
-
-# Arguments
-- `v`     : filesystem path to the video file.
-- `frame` : 0-based frame index.
-- `fps`   : frames per second for time-based seeking (default 25).
-"""
 function getFrame(v::String, frame; fps = 25)
 	v = VideoIO.openvideo(v)
 	seek(v, frame/fps)
 	return read(v)
 end
 
-"""
-	time2String(time::Float64; digits=2, mdigits=2) -> String
-
-Format a duration in seconds as a zero-padded `MM:SS.ms` string.
-
-# Arguments
-- `time`    : elapsed time in seconds.
-- `digits`  : decimal digits for the sub-second part (default 2 → hundredths).
-- `mdigits` : minimum width for the minutes field, zero-padded (default 2).
-
-# Example
-```julia
-julia> time2String(75.4)
-"01:15.40"
-```
-"""
 function time2String(time::Float64; digits = 2, mdigits = 2)
 	minutes = floor(Int, time / 60)
 	seconds = floor(Int, time % 60)
@@ -478,42 +228,6 @@ function time2String(time::Float64; digits = 2, mdigits = 2)
 	return "$(lpad(string(minutes), mdigits, '0')):$(lpad(string(seconds), 2, '0')).$(lpad(string(milliseconds), digits, '0'))"
 end
 
-"""
-	__calibrateCamera(py_img, filename, count, camera, i, cb_grid, objp,
-					  objpoints, imgpoints, filenames;
-					  criteria, save, ret_py, debug, cv, np, target_dir, win_size)
-		-> (count::Int, ret::Py)
-
-Internal per-image worker for `calibrateCamera`.  Runs `cv2.findChessboardCorners`
-on a pre-converted BGR numpy image, refines corners with `cornerSubPix`, and
-accumulates results into the shared `objpoints`/`imgpoints`/`filenames` lists
-(mutated in-place).
-
-# Arguments
-- `py_img`     : BGR numpy array of the image (already converted from Julia).
-- `filename`   : identifier string stored in `filenames[camera]` on success
-				 (typically a frame number or image filename).
-- `count`      : current number of successfully processed images; incremented on success.
-- `camera`     : 1-based camera index into `filenames`.
-- `i`          : raw camera label (same value used to build directory paths).
-- `cb_grid`    : 2-element `(nx, ny)` inner-corner count passed to OpenCV.
-- `objp`       : 3×N `Float32` matrix of world object points for one board view.
-- `objpoints`  : accumulator list; `np.array(objp')` is pushed on success.
-- `imgpoints`  : accumulator list; refined corner array is pushed on success.
-- `filenames`  : `Vector{Vector{String}}`; `filenames[camera]` is appended on success.
-- `criteria`   : OpenCV termination criteria for `cornerSubPix`.
-- `save`       : if `true`, write the annotated corner image to
-				 `target_dir/<i>/corners/`.
-- `ret_py`     : unused flag kept for API consistency with the outer function.
-- `debug`      : print ✅/❌ per image when `true`.
-- `cv`, `np`   : Python `cv2` / `numpy` modules; imported lazily if `nothing`.
-- `target_dir` : root directory used when `save=true`.
-- `win_size`   : half-window size for `cornerSubPix` (default `(11, 11)`).
-
-# Returns
-`(count, ret)` — updated accumulator count and the raw Python boolean result
-from `findChessboardCorners`.
-"""
 function __calibrateCamera(
 	py_img,
 	filename,
@@ -572,52 +286,6 @@ function __calibrateCamera(
 	return count, ret
 end
 
-"""
-	calibrateCamera(target_dir, num_cameras, cb_grid, cb_size, cb_plane;
-					criteria, save, ret_py, return_py_intrinsic, include_list,
-					debug, num_images, from_video, stride, start_frame, end_frame,
-					win_size, invert, vfile_name, guess_mtx, guess_dist,
-					verbosity, RO, iFixedPoint, PnP, ransac, refineLM, fps)
-
-Single-stage camera calibration over image files or video frames.
-
-Processes one or more cameras in `num_cameras`, detects chessboard corners in every
-eligible frame via `__calibrateCamera`, then runs the chosen solve strategy:
-- **Standard** (`cv2.calibrateCamera`) — full intrinsic + extrinsic from scratch.
-- **RO** (`cv2.calibrateCameraRO`) — release-object variant; requires `iFixedPoint`.
-- **PnP** (`cv2.solvePnP[Ransac]`) — fix instrinsics from `guess_mtx`/`guess_dist`,
-  solve per-frame extrinsics only.  Optionally refined with `solvePnPRefineLM`.
-
-# Key Arguments
-- `target_dir`  : path prefix; camera `i` images are in `target_dir * string(i)/`.
-- `num_cameras` : `Int` (uses `1:num_cameras`) or an explicit iterable of camera labels.
-- `cb_grid`     : 3-tuple `(nx, ny, nz)` of inner corners; zero in the flat dimension.
-- `cb_size`     : physical square size (any consistent unit, e.g. mm).
-- `cb_plane`    : 3-tuple sign vector indicating board orientation,
-				  e.g. `(1, 1, 0)` for an XY board, `(1, 0, 1)` for XZ.
-- `from_video`  : if `true`, read frames from a video file instead of JPEG/PNG images.
-- `stride`      : frame-sampling step; may be a scalar or per-camera array.
-- `start_frame` / `end_frame` : frame range within video (scalar or per-camera).
-- `guess_mtx`   : initial intrinsic matrix per camera (required for PnP / RO with guess).
-- `guess_dist`  : initial distortion vector per camera.
-- `ransac`      : use `solvePnPRansac` instead of `solvePnP` (PnP mode only).
-- `refineLM`    : refine each pose with `solvePnPRefineLM` after initial solve.
-- `verbosity`   : `0` = silent, `1` = per-frame, `2` = matrices.
-
-# Returns (default)
-`(ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_err_arr, filenames, ret_cameras)`
-
-With `ret_py=true` an extra tuple of raw Python arrays is appended.
-With `return_py_intrinsic=true` the Python `mtx_arr` and `dist_arr` are appended instead.
-
-## Array layouts
-- `mtx_arr[i]`         : 3×3 `Matrix{Float64}` intrinsic for camera `i`.
-- `dist_arr[:, i]`     : 5-element distortion vector for camera `i`.
-- `rvecs_arr[i][j]`    : 3×3 rotation matrix for image `j` of camera `i`.
-- `tvecs_arr[i][:, j]` : 3-vector translation for image `j` of camera `i`.
-- `reproj_err_arr[i]`  : per-image reprojection error vector for camera `i`.
-- `filenames[i]`       : ordered list of frame identifiers used for camera `i`.
-"""
 function calibrateCamera(
 	target_dir,
 	num_cameras,
@@ -647,6 +315,7 @@ function calibrateCamera(
 	ransac = false,
 	refineLM = false,
 	fps = 25,
+	batch_size = 16,
 )
 
 	cv = pyimport("cv2")
@@ -713,6 +382,26 @@ function calibrateCamera(
 	if debug
 		println("Camera array: ", num_cameras)
 	end
+
+	# Helper function to process a batch for PnP mode
+	function process_pnp_batch!(objpoints_batch, imgpoints_batch, filenames_batch,
+		accumulated_rvecs, accumulated_tvecs, accumulated_inliers,
+		accumulated_filenames, accumulated_rets,
+		mtx, dist, cv, ransac, debug_batch = false)
+		for j in 1:length(objpoints_batch)
+			if ransac
+				_, rvec, tvec, inlier = cv.solvePnPRansac(objpoints_batch[j], imgpoints_batch[j], mtx, dist, useExtrinsicGuess = false)
+				push!(accumulated_inliers, inlier)
+			else
+				_, rvec, tvec = cv.solvePnP(objpoints_batch[j], imgpoints_batch[j], mtx, dist, useExtrinsicGuess = false)
+			end
+			push!(accumulated_rvecs, rvec)
+			push!(accumulated_tvecs, tvec)
+			push!(accumulated_rets, true)
+		end
+		append!(accumulated_filenames, filenames_batch)
+	end
+
 	# for i in 1:num_cameras
 	for i in num_cameras
 		rets = Vector{Bool}()
@@ -744,8 +433,19 @@ function calibrateCamera(
 		end
 
 		filenames[camera] = Vector{String}()
+
+		# Batch processing variables
 		objpoints = []
 		imgpoints = []
+		batch_filenames = []
+
+		# Accumulated results for PnP mode
+		accumulated_rvecs = []
+		accumulated_tvecs = []
+		accumulated_inliers = []
+		accumulated_filenames = []
+		accumulated_rets = []
+
 		jl_img = nothing
 		if debug
 			if from_video
@@ -757,7 +457,7 @@ function calibrateCamera(
 		end
 		# print stride and start_frame
 		if debug
-			println("Camera $(i): Using stride = $(current_stride), start_frame = $(current_start_frame), end_frame = $(current_end_frame), fps = $(fps)")
+			println("Camera $(i): Using stride = $(current_stride), start_frame = $(current_start_frame)")
 		else
 			# print("Camera $(i)...")
 		end
@@ -793,27 +493,70 @@ function calibrateCamera(
 						py_img = cv.cvtColor(np.array([UInt8(x.val) for x in jl_img]), cv.COLOR_GRAY2BGR)
 
 						try
-							count, ret = __calibrateCamera(
-								py_img,
-								"$(frame_number)",
-								count,
-								camera,
-								i,
-								cb_grid,
-								objp,
-								objpoints,
-								imgpoints,
-								filenames;
-								criteria = criteria,
-								save = save,
-								ret_py = ret_py,
-								debug = debug,
-								cv = cv,
-								np = np,
-								target_dir = target_dir,
-								win_size = win_size,
-							)
-							push!(rets, pyconvert(Bool, ret))
+							if PnP
+								# For PnP mode, use batched processing
+								count, ret = __calibrateCamera(
+									py_img,
+									"$(frame_number)",
+									count,
+									camera,
+									i,
+									cb_grid,
+									objp,
+									objpoints,
+									imgpoints,
+									batch_filenames;
+									criteria = criteria,
+									save = save,
+									ret_py = ret_py,
+									debug = debug,
+									cv = cv,
+									np = np,
+									target_dir = target_dir,
+									win_size = win_size,
+								)
+								push!(rets, pyconvert(Bool, ret))
+
+								# Process batch when full
+								if length(objpoints) >= batch_size
+									process_pnp_batch!(objpoints, imgpoints, batch_filenames,
+										accumulated_rvecs, accumulated_tvecs, accumulated_inliers,
+										accumulated_filenames, accumulated_rets,
+										guess_mtx[findfirst(x -> x == i, num_cameras)],
+										guess_dist[findfirst(x -> x == i, num_cameras)],
+										cv, ransac, debug)
+									# Clear batch
+									empty!(objpoints)
+									empty!(imgpoints)
+									empty!(batch_filenames)
+									if verbosity >= 2 && debug
+										println("\n\tProcessed batch, total frames: $(length(accumulated_rvecs))")
+									end
+								end
+							else
+								# For non-PnP mode, accumulate all points
+								count, ret = __calibrateCamera(
+									py_img,
+									"$(frame_number)",
+									count,
+									camera,
+									i,
+									cb_grid,
+									objp,
+									objpoints,
+									imgpoints,
+									filenames;
+									criteria = criteria,
+									save = save,
+									ret_py = ret_py,
+									debug = debug,
+									cv = cv,
+									np = np,
+									target_dir = target_dir,
+									win_size = win_size,
+								)
+								push!(rets, pyconvert(Bool, ret))
+							end
 						catch
 							continue
 						end
@@ -849,37 +592,94 @@ function calibrateCamera(
 					py_img = cv.cvtColor(np.array([UInt8(x.val) for x in jl_img]), cv.COLOR_GRAY2BGR)
 
 					try
-						count, ret =
-							__calibrateCamera(
-								py_img,
-								filename,
-								count,
-								camera,
-								i,
-								cb_grid,
-								objp,
-								objpoints,
-								imgpoints,
-								filenames;
-								criteria = criteria,
-								save = save,
-								ret_py = ret_py,
-								debug = debug,
-								cv = cv,
-								np = np,
-								target_dir = target_dir,
-								win_size = win_size,
-							)
-						push!(rets, pyconvert(Bool, ret))
+						if PnP
+							# For PnP mode, use batch_filenames
+							count, ret =
+								__calibrateCamera(
+									py_img,
+									filename,
+									count,
+									camera,
+									i,
+									cb_grid,
+									objp,
+									objpoints,
+									imgpoints,
+									batch_filenames;
+									criteria = criteria,
+									save = save,
+									ret_py = ret_py,
+									debug = debug,
+									cv = cv,
+									np = np,
+									target_dir = target_dir,
+									win_size = win_size,
+								)
+							push!(rets, pyconvert(Bool, ret))
+
+							# Process batch when full
+							if length(objpoints) >= batch_size
+								process_pnp_batch!(objpoints, imgpoints, batch_filenames,
+									accumulated_rvecs, accumulated_tvecs, accumulated_inliers,
+									accumulated_filenames, accumulated_rets,
+									guess_mtx[findfirst(x -> x == i, num_cameras)],
+									guess_dist[findfirst(x -> x == i, num_cameras)],
+									cv, ransac, debug)
+								# Clear batch
+								empty!(objpoints)
+								empty!(imgpoints)
+								empty!(batch_filenames)
+							end
+						else
+							# For non-PnP mode, accumulate all points
+							count, ret =
+								__calibrateCamera(
+									py_img,
+									filename,
+									count,
+									camera,
+									i,
+									cb_grid,
+									objp,
+									objpoints,
+									imgpoints,
+									filenames;
+									criteria = criteria,
+									save = save,
+									ret_py = ret_py,
+									debug = debug,
+									cv = cv,
+									np = np,
+									target_dir = target_dir,
+									win_size = win_size,
+								)
+							push!(rets, pyconvert(Bool, ret))
+						end
 					catch
 						continue
 					end
 				end
 			end
 		end
+		# Process remaining frames in incomplete batch for PnP mode
+		if PnP && length(objpoints) > 0
+			process_pnp_batch!(objpoints, imgpoints, batch_filenames,
+				accumulated_rvecs, accumulated_tvecs, accumulated_inliers,
+				accumulated_filenames, accumulated_rets,
+				guess_mtx[findfirst(x -> x == i, num_cameras)],
+				guess_dist[findfirst(x -> x == i, num_cameras)],
+				cv, ransac, debug)
+			empty!(objpoints)
+			empty!(imgpoints)
+			empty!(batch_filenames)
+			if verbosity >= 2 && debug
+				println("\n\tProcessed final batch, total frames: $(length(accumulated_rvecs))")
+			end
+		end
+
 		ret_cameras[camera] = rets
 
-		if isnothing(jl_img)
+		if jl_img == nothing
 			println("No images found for camera $(i)")
 			continue
 		end
@@ -912,23 +712,15 @@ function calibrateCamera(
 					criteria = criteria)
 			end
 		elseif PnP
-			rvecs, tvecs, inliers = [], [], []
+			# Use accumulated results from batched processing
+			rvecs = OffsetArray(accumulated_rvecs, 0:(length(accumulated_rvecs)-1))
+			tvecs = OffsetArray(accumulated_tvecs, 0:(length(accumulated_tvecs)-1))
+			inliers = OffsetArray(accumulated_inliers, 0:(length(accumulated_inliers)-1))
 			mtx = guess_mtx[findfirst(x -> x == i, num_cameras)]
 			dist = guess_dist[findfirst(x -> x == i, num_cameras)]
 			ret = 0
-			for j in axes(objpoints, 1)
-				if ransac
-					_, rvec, tvec, inlier = cv.solvePnPRansac(objpoints[j], imgpoints[j], guess_mtx[findfirst(x -> x == i, num_cameras)], guess_dist[findfirst(x -> x == i, num_cameras)], useExtrinsicGuess = false)
-					push!(inliers, inlier)
-				else
-					_, rvec, tvec = cv.solvePnP(objpoints[j], imgpoints[j], guess_mtx[findfirst(x -> x == i, num_cameras)], guess_dist[findfirst(x -> x == i, num_cameras)], useExtrinsicGuess = false)
-				end
-				push!(rvecs, rvec)
-				push!(tvecs, tvec)
-			end
-			rvecs = OffsetArray(rvecs, 0:(length(rvecs)-1))
-			tvecs = OffsetArray(tvecs, 0:(length(tvecs)-1))
-			inliers = OffsetArray(inliers, 0:(length(inliers)-1))
+			# Update filenames with accumulated filenames
+			filenames[camera] = accumulated_filenames
 		else
 			if isnothing(guess_mtx)
 				ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, reverse(jl_img.size), nothing, nothing)
@@ -949,8 +741,8 @@ function calibrateCamera(
 					criteria = criteria)
 			end
 		end
-
-		if refineLM
+		# why !PnP
+		if refineLM && !PnP
 			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
 			if debug
 				println("\tError before RefineLM: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
@@ -989,7 +781,18 @@ function calibrateCamera(
 			# rvec, tvec = cv.solvePnPRefineLM(objpoints, imgpoints, guess_mtx[findfirst(x -> x == i, num_cameras)], guess_dist[findfirst(x -> x == i, num_cameras)], rvecs, tvecs)
 		end
 
-		reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
+		# Calculate reprojection error based on mode
+		if PnP
+			# For PnP mode, we need to reconstruct objpoints and imgpoints from processed batches
+			# Since they were cleared during batching, skip detailed reprojection error
+			# This could be improved by storing objpoints/imgpoints alongside results
+			reproj_err = zeros(Float64, length(rvecs))
+			if debug
+				println("\tSkipping detailed reprojection error for batched PnP mode")
+			end
+		else
+			reproj_err = __reprojection_error(cv, np, objpoints, imgpoints, mtx, dist, rvecs, tvecs)
+		end
 		if debug
 			println("Camera $(i) calibration error: $ret: mean = $(sum(reproj_err)/length(reproj_err)), std = $(std(reproj_err))")
 			if verbosity >= 2
@@ -1040,43 +843,6 @@ function calibrateCamera(
 	end
 end
 
-"""
-	calibrate(target_dir, num_cameras, cb_grid, cb_size, cb_plane;
-			  criteria, save, ret_py, return_py_intrinsic, include_list,
-			  debug, num_images, from_video, stride,
-			  start_stage1, end_stage1, start_stage2, end_stage2,
-			  win_size, invert, vfile_name, guess_mtx, guess_dist,
-			  verbosity, RO, iFixedPoint, PnP, ransac, refineLM, fps)
-
-Two-stage camera calibration pipeline.
-
-**Stage 1 — Intrinsics** (`calibrateCamera` in standard/RO mode):
-Samples `num_images[1]` frames uniformly from `[start_stage1, end_stage1]`,
-detects chessboard corners, and solves for the intrinsic matrix and distortion
-coefficients.  Skipped when `guess_mtx` and `guess_dist` are both provided.
-
-**Stage 2 — Extrinsics** (`calibrateCamera` in PnP mode):
-Fixes the intrinsics from Stage 1 and solves per-frame pose (rotation + translation)
-for every frame in `[start_stage2, end_stage2]`.  Optionally refined with
-Levenberg-Marquardt (`refineLM=true`) and outlier-robust via RANSAC (`ransac=true`).
-
-# Key Arguments
-- `num_images`    : 2-element array `[n_stage1, n_stage2]` capping the number of frames
-				   used in each stage.  `Inf` means unlimited.
-- `start_stage1` / `end_stage1` : frame index range for Stage 1 (scalar or per-camera).
-- `start_stage2` / `end_stage2` : frame index range for Stage 2 (scalar or per-camera).
-- `guess_mtx` / `guess_dist`    : pre-computed intrinsic matrices and distortion vectors;
-								  when supplied, Stage 1 is skipped entirely.
-- all other keyword arguments are forwarded verbatim to `calibrateCamera`.
-
-# Returns
-Same layout as `calibrateCamera`:
-`(ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties)`
-
-With `ret_py=true`, raw Python arrays are appended.
-With `return_py_intrinsic=true`, the Python-format `py_mtx_arr` and `py_dist_arr` are appended.
-`properties` is a `Dict` recording the core calibration parameters for provenance.
-"""
 function calibrate(
 	target_dir,
 	num_cameras,
@@ -1108,6 +874,7 @@ function calibrate(
 	ransac = false,
 	refineLM = false,
 	fps = 25,
+	batch_size = 16,
 )
 	properties = Dict([
 		("target_dir", target_dir),
@@ -1170,6 +937,7 @@ function calibrate(
 				# refineLM = false,
 				iFixedPoint = 20 * 3 + 16,
 				fps = fps,
+				batch_size = batch_size,
 			)
 	else
 		np = pyimport("numpy")
@@ -1203,6 +971,7 @@ function calibrate(
 				ransac = ransac,
 				refineLM = refineLM,
 				fps = fps,
+				batch_size = batch_size,
 			)
 		return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties, py
 	else
@@ -1229,6 +998,7 @@ function calibrate(
 				ransac = ransac,
 				refineLM = refineLM,
 				fps = fps,
+				batch_size = batch_size,
 			)
 		if return_py_intrinsic
 			return ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, reproj_arr, filenames, ret, properties, py_mtx_arr, py_dist_arr

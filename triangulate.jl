@@ -214,7 +214,7 @@ function triangulate_batched(Ks, Rs, ts, points::Vector{<:Matrix}, assignments::
 			Ps_norm_vec[view1_idx],
 			Ps_norm_vec[view2_idx],
 			view(points_norm_vec[view1_idx], :, :),
-			view(points_norm_vec[view2_idx], :, assign_masked)
+			view(points_norm_vec[view2_idx], :, assign_masked),
 		)
 
 		triangulated = collect(triangulated)
@@ -344,7 +344,7 @@ function triangulatePoints(points, image_names, cams, datafile)
 	return distances[begin:(end-1)], cumulative_assignments[:, begin:(end-1)], reconstructed_points[:, :, begin:(end-1)]
 end
 
-function triangulateSubsetPoints(points, image_names, cams, datafile)
+function triangulateSubsetPoints(points, image_names, cams, datafile; cam_mtx_override = false)
 	# points are Vector{Matrix{Float32, 2, n}, views} where n is the number of points in the respective view. n is not the same for all views. 
 	K = []
 	d = []
@@ -352,14 +352,24 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 	t = []
 	# iterate over views to get calibration data for each view
 	for view in eachindex(points)
-		# Handle both JLD file path and direct calibration data
-		if datafile isa AbstractString
-			# datafile is a path to JLD file
-			K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
-		else
-			# datafile is a tuple/named tuple: (ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+		if cam_mtx_override
 			ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = datafile
-			K1, d1, R1, t1 = extract_matrices(cams[view], view, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+			K1 = mtx_arr[begin]
+			d1 = dist_arr[:, begin]
+			R1 = rvecs_arr[begin][begin]
+			t1 = tvecs_arr[begin][:, begin]
+		else
+			# Handle both JLD file path and direct calibration data
+			if datafile isa AbstractString
+				# datafile is a path to JLD file
+				K1, d1, R1, t1 = extract_matrices(cams[view], image_names[view], datafile)
+			else
+				# datafile is a tuple/named tuple: (ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+				ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames = datafile
+				# println("$(typeof(cams)), $(typeof(cams[view])), $(typeof(view)), $(typeof(ret_arr)), $(typeof(mtx_arr)), $(typeof(dist_arr)), $(typeof(rvecs_arr)), $(typeof(tvecs_arr)), $(typeof(filenames))")
+				# println(extract_matrices(cams[view], view, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames))
+				K1, d1, R1, t1 = extract_matrices(cams[view], view, ret_arr, mtx_arr, dist_arr, rvecs_arr, tvecs_arr, filenames)
+			end
 		end
 		push!(K, K1)
 		push!(d, d1)
@@ -374,34 +384,35 @@ function triangulateSubsetPoints(points, image_names, cams, datafile)
 
 	# distances are stored in a 3D array,
 	# each layer (third dimension) i contains the 3D distances between points in view[i] (row) and view[i+1] (column)
-
-sizes = size.(points, 2) # also potentially offset if points are offset in indexing
-distances = similar(points, Matrix{Float32})
-pwise_max_sizes = [maximum([sizes[i], sizes[(i-firstindex(sizes)+1)%length(sizes)+firstindex(sizes)]]) for i in eachindex(sizes)]
-for i in eachindex(points)
-	next_i = (i - firstindex(points) + 1) % length(points) + firstindex(points)
-	# println("View-pairs ($i, $next_i) with sizes ($(sizes[i]), $(sizes[next_i]): $(pwise_max_sizes[i]))")
-end
-for view1 in eachindex(points)
-	view2 = (view1 - firstindex(points) + 1) % length(points) + firstindex(points)
-	local_distances = zeros(Float32, size(points[view1], 2), size(points[view2], 2))
-	for i in axes(points[view1], 2)
-		for j in axes(points[view2], 2)
-			local_distances[i, j] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[view1][:, i], points[view2][:, j])
-		end
+	println("Computing pairwise distances between points in different views...")
+	sizes = size.(points, 2) # also potentially offset if points are offset in indexing
+	distances = similar(points, Matrix{Float32})
+	pwise_max_sizes = [maximum([sizes[i], sizes[(i-firstindex(sizes)+1)%length(sizes)+firstindex(sizes)]]) for i in eachindex(sizes)]
+	for i in eachindex(points)
+		next_i = (i - firstindex(points) + 1) % length(points) + firstindex(points)
+		# println("View-pairs ($i, $next_i) with sizes ($(sizes[i]), $(sizes[next_i]): $(pwise_max_sizes[i]))")
 	end
-	distances[view1] = fill(2*maximum(local_distances), pwise_max_sizes[view1], pwise_max_sizes[view1])
-	distances[view1][begin:(begin+size(points[view1], 2)-1), begin:(begin+size(points[view2], 2)-1)] = local_distances
-end
+	for view1 in eachindex(points)
+		view2 = (view1 - firstindex(points) + 1) % length(points) + firstindex(points)
+		local_distances = zeros(Float32, size(points[view1], 2), size(points[view2], 2))
+		for i in axes(points[view1], 2)
+			for j in axes(points[view2], 2)
+				local_distances[i, j] = distance3D(K[view1], d[view1], R[view1], t[view1], K[view2], d[view2], R[view2], t[view2], points[view1][:, i], points[view2][:, j])
+			end
+		end
+		distances[view1] = fill(2*maximum(local_distances), pwise_max_sizes[view1], pwise_max_sizes[view1])
+		distances[view1][begin:(begin+size(points[view1], 2)-1), begin:(begin+size(points[view2], 2)-1)] = local_distances
+	end
+	println("Distance computation complete! Now solving assignment problem for each view pair...")
+	assignments = Vector{Vector{Int}}()
+	jldsave("assets/sfm/distances_$(1)_$(sfm_start)_$(sfm_end).jld2"; distances)
+	for view in eachindex(points)
+		assignment, _ = hungarian(distances[view])
+		push!(assignments, assignment)
+	end
 
-assignments = Vector{Vector{Int}}()
-for view in eachindex(points)
-	assignment, _ = hungarian(distances[view])
-	push!(assignments, assignment)
-end
-
-assignments .= [
-	# begin
+	assignments .= [
+		# begin
 		# println("$i -- $((i+1) % length(points)): $(i+firstindex(points)-1) --- $(i%length(points)+firstindex(points))")
 		map(x ->
 				x <= size(
@@ -409,10 +420,13 @@ assignments .= [
 				x : -1,
 			a[1:size(points[i+firstindex(points)-1], 2)],
 		)
-	# end
-	for (i, a) in enumerate(assignments)
-]
-
+		# end
+		for (i, a) in enumerate(assignments)
+	]
+	println("Assignments computed! Now triangulating points for each view pair...")
+	for i in eachindex(assignments)
+		println("$i: $(assignments[i])")
+	end
 	# cumulative_assignments = zeros(Int, size(points, 2), size(points, 3) + 1)
 	# cumulative_assignments[:, 1] = 1:size(points, 2)
 	# for view in axes(points, 3)
@@ -426,6 +440,7 @@ assignments .= [
 	# end
 
 	reconstructed_points = triangulate_batched(parent(K), parent(R), parent(t), parent(points), assignments)
+	println("Triangulation complete! Reshaping results...")
 	reconstructed_points = OffsetArray(reconstructed_points, firstindex(points):lastindex(points))
 
 	return distances, OffsetArray(assignments, firstindex(points):lastindex(points)), reconstructed_points
