@@ -8,53 +8,51 @@
 \section{Introduction}
 \label{sec:intro}
 
-Feature detection over a scale space---most famously the Scale-Invariant
-Feature Transform (SIFT)~\cite{lowe2004}---remains a workhorse of computer
-vision, underpinning registration, tracking, structure-from-motion, and
-deformation measurement. Its computational profile, however, is a poor match
-for the way it is usually implemented on GPUs. A canonical pipeline builds a
-Gaussian pyramid, differences adjacent scales to form a Difference-of-Gaussians
-(DoG) volume, searches that volume for local extrema, assigns orientations, and
-emits descriptors. Each of these stages is typically realized as a separate
-kernel that reads and writes large intermediate buffers to device memory. On
-modern GPUs, where arithmetic throughput vastly outstrips off-chip memory
-bandwidth, materializing the DoG volume and repeatedly streaming scale-space
-images through DRAM is the dominant cost, not the convolutions or the
-comparisons themselves.
+Feature detection over a scale space is a workhorse of computer vision, and the
+Scale-Invariant Feature Transform (SIFT)~\cite{lowe2004} is its most widely used
+instance. Its computational profile is a poor match for the way it is usually
+implemented on GPUs. A canonical pipeline builds a Gaussian pyramid, subtracts
+adjacent scales to form a Difference-of-Gaussians (DoG) volume, and then
+searches that volume for local extrema before it assigns orientations and emits
+descriptors. Each stage is usually realized as a separate kernel that reads and
+writes large intermediate buffers to device memory. On modern GPUs the off-chip
+memory bandwidth is far smaller than the available arithmetic throughput, so the
+cost is dominated by materializing the DoG volume and by streaming scale-space
+images through DRAM rather than by the convolutions or the comparisons
+themselves.
 
-This mismatch is especially acute for \emph{real-time video}, where a detector
-must run every frame within a fixed latency budget and where per-frame memory
-allocation and pyramid teardown add avoidable overhead. Existing GPU SIFT
-implementations such as SiftGPU~\cite{siftgpu} and PopSift~\cite{popsift}
-deliver strong throughput but retain the staged, memory-materializing
-structure inherited from CPU designs, and they target the classic descriptor
-rather than the specific needs of dense deformation measurement.
+This mismatch becomes more severe for real-time video. A detector must run on
+every frame within a fixed latency budget, and per-frame memory allocation
+together with pyramid teardown adds avoidable overhead. Existing GPU
+implementations such as SiftGPU~\cite{siftgpu} and PopSift~\cite{popsift} reach
+strong throughput, yet they keep the staged, memory-materializing structure
+inherited from CPU designs. They also target the classic descriptor rather than
+the specific needs of dense deformation measurement.
 
-We present \textbf{SIBD}, a \emph{Scale-Invariant Blob Detector} that is
-fully GPU-resident: the entire pipeline---from separable Gaussian smoothing to
-a compacted list of characterized keypoints---executes without returning
-control to the host and without ever writing a DoG volume to device memory.
-SIBD makes three systems observations concrete. First, the DoG difference and
-the $3\times3\times3$ scale-space extremum test can be \emph{fused in shared
-memory}: a single kernel loads a small stack of adjacent Gaussian scales into
-on-chip memory, forms the differences on the fly, performs the min/max
-neighborhood test, and never spills the DoG. Second, separable convolution can
-be tiled with overlapping \emph{aprons} so that halo regions are resolved
-inside a thread block, and the column and row passes can be fused into a single
-launch. Third, the sparse extrema can be packed into a dense keypoint list with
-\emph{warp-aggregated} ballot-and-atomic compaction, avoiding a full-image
-scan on the host.
+We present \textbf{SIBD}, a \emph{Scale-Invariant Blob Detector} that is fully
+GPU-resident. The entire pipeline runs from separable Gaussian smoothing to a
+compacted list of characterized keypoints without returning control to the host
+and without ever writing a DoG volume to device memory. SIBD makes several
+systems observations concrete. The DoG difference and the $3\times3\times3$
+scale-space extremum test are fused in shared memory, so that a single kernel
+loads a small stack of adjacent Gaussian scales into on-chip memory, forms the
+differences in place, performs the min/max neighborhood test, and never spills
+the DoG. The separable convolution is tiled with overlapping \emph{aprons} so
+that halo regions are resolved inside a thread block, and the column and row
+passes are fused into a single launch. The sparse extrema are packed into a
+dense keypoint list with \emph{warp-aggregated} ballot-and-atomic compaction,
+which avoids a full-image scan on the host.
 
-Beyond systems structure, SIBD introduces a keypoint characterization tailored
-to blobs. Rather than Lowe's histogram of gradient \emph{directions}, SIBD
-accumulates an angular profile of the \emph{radial intensity derivative}
-(a radial ``flux'') around each keypoint, binned by angular position. The
-coefficient of variation of this profile is a direct, rotation-symmetric
-measure of how blob-like a candidate is, and we use it to replace SIFT's
-Hessian-based edge rejection with a single, cheaply computed symmetry filter.
-This is well matched to our target application: tracking printed or painted
-\emph{blob markers} on skin as an anatomical joint flexes, and recovering a
-dense \emph{strain field} from the resulting position field.
+Beyond this systems structure, SIBD introduces a keypoint characterization
+tailored to blobs. In place of Lowe's histogram of gradient \emph{directions},
+SIBD accumulates an angular profile of the \emph{radial intensity derivative}
+around each keypoint, binned by angular position. The coefficient of variation
+of this profile is a direct and rotation-symmetric measure of how blob-like a
+candidate is, and we use it in place of SIFT's Hessian-based edge rejection as a
+single symmetry filter that is cheap to compute. This choice is well matched to
+our target application, which is the tracking of printed or painted \emph{blob
+markers} on skin as an anatomical joint flexes and the recovery of a dense
+\emph{strain field} from the resulting position field.
 
 \vspace{0.5em}
 \noindent\textbf{Contributions.} We claim the following:
@@ -86,9 +84,9 @@ callout. Add one-sentence quantitative headline once results exist.
 \label{sec:related}
 
 \subsection{Scale-space feature detection}
-SIFT~\cite{lowe2004} established the Gaussian/DoG scale space, extremum
-localization, orientation assignment, and gradient-histogram descriptor that
-most subsequent detectors refine. SURF~\cite{surf} approximates the Laplacian
+SIFT~\cite{lowe2004} established the Gaussian and DoG scale space together with
+the keypoint localization and descriptor stages that most later detectors
+refine. SURF~\cite{surf} approximates the Laplacian
 with box filters and integral images for speed; KAZE/A-KAZE~\cite{kaze} move to
 nonlinear diffusion scale spaces. Blob detectors based on the Laplacian- or
 Hessian-of-Gaussian and their affine-covariant variants~\cite{mikolajczyk2005}
@@ -206,7 +204,7 @@ $\hat{\mathbf{r}}=-\mathbf{d}/\rho$. The image gradient
 $\nabla I(\mathbf{p})=(I_x,I_y)$ is estimated by central differences. Following
 the Oral-Qual formulation, the neighborhood accumulates a projection of the
 gradient onto the radial direction. We state the \emph{code-faithful} form,
-which augments Eq.~(1) of the Oral-Qual writeup in three respects
+which augments Eq.~(1) of the Oral-Qual writeup in several respects
 (marked in \textcolor{teal}{teal}).
 
 \vspace{0.3em}
@@ -217,8 +215,8 @@ m(\mathbf{p}) \;=\; \nabla I(\mathbf{p})\cdot\hat{\mathbf{r}}
 \;=\; -\,\frac{\nabla I(\mathbf{p})\cdot\mathbf{d}}{\rho},
 \qquad \rho>0 .
 \end{equation}
-This is the (inward) \enrich{radial \emph{derivative}} of intensity---a
-projection onto the \enrich{\emph{unit}} radial direction---rather than the raw
+This is the (inward) \enrich{radial \emph{derivative}} of intensity, that is, a
+projection onto the \enrich{\emph{unit}} radial direction, rather than the raw
 dot product with the full position vector $\mathbf{r}$ written in Oral-Qual
 Eq.~(1). \enrich{At the singular center pixel ($\rho=0$) the kernel instead uses
 $m=\tfrac12\lVert\nabla I\rVert$ and bins by the gradient angle}, a case the
@@ -260,9 +258,9 @@ projection $m=\nabla I\cdot\hat{\mathbf{r}}$ is a dot product of two co-rotating
 vectors and is therefore \emph{invariant}. The weight $w$ depends only on
 $\rho$ and is invariant. The bin index shifts uniformly, $\theta\mapsto
 \theta+\phi$, so the signature undergoes a cyclic shift, $h[b]\mapsto
-h[b-\Delta]$. Consequently any \emph{shift-invariant} summary of $h$---in
-particular its mean and standard deviation, hence the coefficient of variation
-of \S\ref{sec:cov}---is exactly rotation invariant (up to bin quantization).
+h[b-\Delta]$. Consequently any \emph{shift-invariant} summary of $h$, in
+particular its mean and its standard deviation, and therefore the coefficient of variation
+of \S\ref{sec:cov}, is exactly rotation invariant up to bin quantization.
 Note this yields a rotation-invariant \emph{selection criterion}, not a
 canonical orientation as in Lowe's method.
 \end{enrichbox}
@@ -296,9 +294,10 @@ without these safeguards.} Because $c$ is a shift-invariant functional of $h$,
 the accept/reject decision inherits the rotation invariance argued in
 \S\ref{sec:orient}.
 
-This single scalar test replaces SIFT's two-part refinement---the low-contrast
-threshold on the DoG response and the Hessian principal-curvature ratio
-$\mathrm{tr}(H)^2/\det(H)$ used for edge rejection~\cite{lowe2004}. \enrich{In
+This single scalar test replaces SIFT's two-part refinement, namely the
+low-contrast threshold on the DoG response together with the Hessian
+principal-curvature ratio $\mathrm{tr}(H)^2/\det(H)$ used for edge
+rejection~\cite{lowe2004}. \enrich{In
 contrast to the Hessian test, which requires forming and factoring a
 $2\times2$ second-moment matrix per candidate, the CV test reuses the already
 computed signature and costs one warp-level mean/variance reduction}, mapping
@@ -376,7 +375,7 @@ Recovered strain vs.\ ground truth on flexing-joint captures; error maps.
 \label{sec:discussion}
 \begin{fillbox}
 Radial-flux signature gives symmetry-based selection but no canonical rotation
-like Lowe's---state clearly. Shared-memory capacity bounds patch radius / layer
+like Lowe's, so state that clearly. Shared-memory capacity bounds patch radius / layer
 count. Behavior under extreme scale change and marker occlusion.
 \end{fillbox}
 
