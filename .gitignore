@@ -1,40 +1,33 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
+# Project assets and generated media
 assets/videos/*
-old/assets/videos/*
-# assets/images/*
-# *.png
 *.jld2
 !assets/camera_intrinsics/*.jld2
 assets/sfm/*.png
 assets/sfm/*.mp4
 assets/LoFTR/*.mp4
-
-old/CUDA_Runtime_jll.jl
-old/CUDA_Runtime_jll.jl/*
-
-# !assets/videos/DJI_20240329_154936_17_null_beauty.mp4
-
 *.pdf
+
+# Generated project outputs
 content/*
+orientations.csv
+orientations_i.csv
+old/assets
+old/CUDA_Runtime_jll.jl
+old/ffmpeg/*
+
+# Native build artifacts
 opencv/*
 opencv_contrib/*
 CMakeFiles/*
-old/ffmpeg/*
-
-old/assets/*
-old/assets
-old/assets/blobs/*
-
-
-# nsight files
-old/*.ncu-rep
-profiler/all/*.ncu-rep
-# C extensions
 *.so
+
+# Profiling reports
+*.ncu-rep
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Distribution / packaging
 .Python
@@ -55,9 +48,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-orientations.csv
-orientations_i.csv
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -191,6 +181,3 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
-old/convolve.0.col.ncu-rep
-old/convolve.0.row.ncu-rep
-old/assets/orientations.csv
