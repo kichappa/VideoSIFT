@@ -1,0 +1,46 @@
+%==============================================================================
+%  SIBD: A Scale-Invariant Blob Detector for Real-Time GPU Strain-Field Capture
+%  IEEEtran driver (IISWC / HPEC / ICIP). Compile with pdflatex (twice).
+%  Shared body: sibd_content.tex ; shared macros: sibd_macros.tex
+%==============================================================================
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\input{sibd_macros}          % shared packages + fillbox/enrich macros
+\usepackage[hidelinks]{hyperref}
+
+%------------------------------------------------------------------------------
+\begin{document}
+
+\title{SIBD: A Scale-Invariant Blob Detector for\\
+Real-Time GPU-Resident Strain-Field Capture}
+
+\author{
+\IEEEauthorblockN{\note{Author list}}
+\IEEEauthorblockA{\note{Affiliation, email}}
+}
+
+\maketitle
+
+%==============================================================================
+\begin{abstract}
+\begin{fillbox}
+Draft after results. Target beats: (1) fully GPU-resident scale-space blob
+detector with no intermediate DoG volume in DRAM; (2) novel radial-flux
+angular signature + coefficient-of-variation symmetry filter; (3) real-time
+per-frame operation via persistent buffer reuse; (4) application to strain-field
+capture from blob-marked skin over a flexing joint. State headline
+speedup vs.\ PopSift/OpenCV-CUDA at equal repeatability, and strain-field
+accuracy vs.\ ground truth.
+\end{fillbox}
+\end{abstract}
+
+\begin{IEEEkeywords}
+GPU, CUDA, scale space, blob detection, SIFT, kernel fusion, real-time vision,
+strain field, feature tracking.
+\end{IEEEkeywords}
+
+% ---- shared body (Introduction through bibliography) ----
+\input{sibd_content}
+
+\end{document}

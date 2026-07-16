@@ -1,0 +1,43 @@
+%==============================================================================
+%  Shared packages + macros for the SIBD paper.
+%  Included by both sibd.tex (IEEEtran) and sibd_acm.tex (acmart).
+%  Do NOT load a document class or citation package here (class-specific).
+%==============================================================================
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{marginnote}
+
+%------------------------------------------------------------------------------
+% "Empty box" macro: a visible TODO placeholder to be filled as we progress.
+%   \fillbox environment  -> orange TODO box
+%   \note{...}            -> inline red note
+%------------------------------------------------------------------------------
+\newtcolorbox{fillbox}[1][]{
+  colback=yellow!8!white,
+  colframe=orange!70!black,
+  fonttitle=\bfseries,
+  title={TODO / FILL},
+  #1
+}
+\newcommand{\note}[1]{\textcolor{red}{[\textbf{NOTE:} #1]}}
+
+%------------------------------------------------------------------------------
+% Enrichment markers: content added/corrected beyond the Oral-Qual writeup.
+%   \enrich{...}      inline, teal, with a margin flag
+%   enrichbox env     block-level enrichment (green tcolorbox)
+%------------------------------------------------------------------------------
+\newcommand{\enrich}[1]{\textcolor{teal}{#1}\marginnote{\footnotesize\textcolor{teal}{$\star$ enrich}}}
+\newtcolorbox{enrichbox}[1][]{
+  colback=teal!6!white,
+  colframe=teal!70!black,
+  fonttitle=\bfseries,
+  title={ENRICHMENT (beyond Oral-Qual writeup)},
+  #1
+}

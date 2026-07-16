@@ -1,0 +1,52 @@
+%==============================================================================
+%  SIBD: A Scale-Invariant Blob Detector for Real-Time GPU Strain-Field Capture
+%  ACM acmart driver (PPoPP / GPGPU workshop). Compile with pdflatex (twice) + bibtex.
+%  Shares the body (sibd_content.tex) and macros (sibd_macros.tex) with sibd.tex.
+%==============================================================================
+\documentclass[sigconf,nonacm]{acmart}
+
+% Shared packages + fillbox/enrich macros. acmart already provides amsmath,
+% xcolor, graphicx, booktabs, hyperref; re-including without options is safe.
+\input{sibd_macros}
+
+\settopmatter{printacmref=false}      % draft: hide ACM reference block
+\setcopyright{none}
+\pagestyle{plain}
+
+%------------------------------------------------------------------------------
+\begin{document}
+
+\title{SIBD: A Scale-Invariant Blob Detector for
+Real-Time GPU-Resident Strain-Field Capture}
+
+\author{\note{Author list}}
+\affiliation{%
+  \institution{\note{Institution}}
+  \city{\note{City}}
+  \country{\note{Country}}
+}
+\email{\note{email@domain}}
+
+\renewcommand{\shortauthors}{\note{Short authors}}
+
+\begin{abstract}
+\begin{fillbox}
+Draft after results. Target beats: (1) fully GPU-resident scale-space blob
+detector with no intermediate DoG volume in DRAM; (2) novel radial-flux
+angular signature + coefficient-of-variation symmetry filter; (3) real-time
+per-frame operation via persistent buffer reuse; (4) application to strain-field
+capture from blob-marked skin over a flexing joint. State headline
+speedup vs.\ PopSift/OpenCV-CUDA at equal repeatability, and strain-field
+accuracy vs.\ ground truth.
+\end{fillbox}
+\end{abstract}
+
+\keywords{GPU, CUDA, scale space, blob detection, SIFT, kernel fusion,
+real-time vision, strain field, feature tracking}
+
+\maketitle
+
+% ---- shared body (Introduction through bibliography) ----
+\input{sibd_content}
+
+\end{document}

@@ -1,0 +1,404 @@
+%==============================================================================
+%  Shared body for the SIBD paper (class-agnostic).
+%  Included by both sibd.tex (IEEEtran) and sibd_acm.tex (acmart) after \maketitle.
+%  Title/author/abstract/keywords live in the class-specific driver files.
+%==============================================================================
+
+%==============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Feature detection over a scale space---most famously the Scale-Invariant
+Feature Transform (SIFT)~\cite{lowe2004}---remains a workhorse of computer
+vision, underpinning registration, tracking, structure-from-motion, and
+deformation measurement. Its computational profile, however, is a poor match
+for the way it is usually implemented on GPUs. A canonical pipeline builds a
+Gaussian pyramid, differences adjacent scales to form a Difference-of-Gaussians
+(DoG) volume, searches that volume for local extrema, assigns orientations, and
+emits descriptors. Each of these stages is typically realized as a separate
+kernel that reads and writes large intermediate buffers to device memory. On
+modern GPUs, where arithmetic throughput vastly outstrips off-chip memory
+bandwidth, materializing the DoG volume and repeatedly streaming scale-space
+images through DRAM is the dominant cost, not the convolutions or the
+comparisons themselves.
+
+This mismatch is especially acute for \emph{real-time video}, where a detector
+must run every frame within a fixed latency budget and where per-frame memory
+allocation and pyramid teardown add avoidable overhead. Existing GPU SIFT
+implementations such as SiftGPU~\cite{siftgpu} and PopSift~\cite{popsift}
+deliver strong throughput but retain the staged, memory-materializing
+structure inherited from CPU designs, and they target the classic descriptor
+rather than the specific needs of dense deformation measurement.
+
+We present \textbf{SIBD}, a \emph{Scale-Invariant Blob Detector} that is
+fully GPU-resident: the entire pipeline---from separable Gaussian smoothing to
+a compacted list of characterized keypoints---executes without returning
+control to the host and without ever writing a DoG volume to device memory.
+SIBD makes three systems observations concrete. First, the DoG difference and
+the $3\times3\times3$ scale-space extremum test can be \emph{fused in shared
+memory}: a single kernel loads a small stack of adjacent Gaussian scales into
+on-chip memory, forms the differences on the fly, performs the min/max
+neighborhood test, and never spills the DoG. Second, separable convolution can
+be tiled with overlapping \emph{aprons} so that halo regions are resolved
+inside a thread block, and the column and row passes can be fused into a single
+launch. Third, the sparse extrema can be packed into a dense keypoint list with
+\emph{warp-aggregated} ballot-and-atomic compaction, avoiding a full-image
+scan on the host.
+
+Beyond systems structure, SIBD introduces a keypoint characterization tailored
+to blobs. Rather than Lowe's histogram of gradient \emph{directions}, SIBD
+accumulates an angular profile of the \emph{radial intensity derivative}
+(a radial ``flux'') around each keypoint, binned by angular position. The
+coefficient of variation of this profile is a direct, rotation-symmetric
+measure of how blob-like a candidate is, and we use it to replace SIFT's
+Hessian-based edge rejection with a single, cheaply computed symmetry filter.
+This is well matched to our target application: tracking printed or painted
+\emph{blob markers} on skin as an anatomical joint flexes, and recovering a
+dense \emph{strain field} from the resulting position field.
+
+\vspace{0.5em}
+\noindent\textbf{Contributions.} We claim the following:
+\begin{itemize}
+  \item A \emph{fully GPU-resident} scale-space blob detector that emits a
+        compacted keypoint list with \emph{zero} intermediate DoG volume in
+        DRAM, via shared-memory fusion of DoG and extrema detection.
+  \item An apron-tiled separable Gaussian pyramid with an optional
+        single-launch fused column/row convolution, and warp-aggregated stream
+        compaction of sparse keypoints.
+  \item A novel \emph{radial-flux angular signature} and a
+        \emph{coefficient-of-variation symmetry filter} for keypoint selection,
+        replacing Hessian edge rejection.
+  \item Real-time, multi-frame operation via \emph{persistent device-buffer
+        reuse}, and an end-to-end application to strain-field capture from
+        blob-marked skin over a flexing joint.
+  \item An evaluation against SIFT, SiftGPU, PopSift, and OpenCV-CUDA on
+        standard repeatability benchmarks and on strain ground truth.
+\end{itemize}
+
+\begin{fillbox}
+Add a teaser figure (Fig.~1): input frame of blob-marked skin $\rightarrow$
+SIBD keypoints $\rightarrow$ recovered strain field, with a latency/throughput
+callout. Add one-sentence quantitative headline once results exist.
+\end{fillbox}
+
+%==============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Scale-space feature detection}
+SIFT~\cite{lowe2004} established the Gaussian/DoG scale space, extremum
+localization, orientation assignment, and gradient-histogram descriptor that
+most subsequent detectors refine. SURF~\cite{surf} approximates the Laplacian
+with box filters and integral images for speed; KAZE/A-KAZE~\cite{kaze} move to
+nonlinear diffusion scale spaces. Blob detectors based on the Laplacian- or
+Hessian-of-Gaussian and their affine-covariant variants~\cite{mikolajczyk2005}
+are the closest classical relatives of SIBD, since we detect and characterize
+blobs rather than corners.
+
+\subsection{GPU implementations of SIFT}
+SiftGPU~\cite{siftgpu} pioneered a GPU pyramid and DoG search using graphics
+pipelines; PopSift~\cite{popsift} and CudaSift~\cite{cudasift} provide modern
+CUDA implementations with competitive throughput, and OpenCV's CUDA module
+ships a production SIFT. These systems retain the staged structure of the CPU
+algorithm: the Gaussian pyramid and DoG volume are materialized in device
+memory and consumed by later kernels.
+\begin{fillbox}
+State precisely how each baseline handles the DoG volume and orientation stage,
+and cite reported throughput numbers we will compare against. Note which ones
+support persistent/streaming operation for video.
+\end{fillbox}
+
+\subsection{Kernel fusion and on-chip data reuse}
+The bandwidth-bound nature of stencil and image pipelines motivates tiling with
+halos/aprons and fusing producer--consumer stages to keep intermediates on
+chip~\cite{halide,micikevicius_stencil}. Warp-aggregated atomics and ballot-based
+stream compaction are established primitives for packing sparse
+outputs~\cite{cuda_warpagg}.
+\begin{fillbox}
+Position SIBD's DoG+extrema fusion relative to generic stencil-fusion work:
+our fusion is across the \emph{scale} dimension (a stack of Gaussian layers),
+which is what removes the DoG volume entirely.
+\end{fillbox}
+
+\subsection{Marker-based deformation and strain measurement}
+Digital image correlation (DIC) and marker tracking recover displacement and
+strain fields from surface patterns~\cite{dic}. On-skin strain sensing for
+biomechanics uses printed patterns or fiducials tracked across frames.
+\begin{fillbox}
+Contrast SIBD (sparse, scale-invariant blob markers tracked in real time on the
+GPU) with dense DIC (subset correlation, typically offline). Argue why
+scale-invariant blob markers are robust to the strong local scale changes that
+occur when skin stretches over a flexing joint.
+\end{fillbox}
+
+%==============================================================================
+\section{Background and Problem Setup}
+\label{sec:background}
+\subsection{Gaussian scale space and DoG extrema}
+\begin{fillbox}
+Define the Gaussian pyramid, octaves/layers, $\sigma_0$, $k$, and the DoG
+approximation to the scale-normalized Laplacian. State the $3\times3\times3$
+extremum criterion. Tie symbols to code: \texttt{sigma0}, \texttt{k},
+\texttt{octaves}, \texttt{layers=scales}.
+\end{fillbox}
+
+\subsection{The strain-field capture problem}
+\begin{fillbox}
+Formalize: given blob markers on skin, detect and match blobs across frames to
+get a position field $\mathbf{u}(x,y,t)$; derive the strain tensor from spatial
+derivatives of the displacement field. Define accuracy metrics vs.\ ground
+truth (mechanical rig / synthetic warp).
+\end{fillbox}
+
+%==============================================================================
+\section{The SIBD Pipeline}
+\label{sec:pipeline}
+\begin{fillbox}
+Overview figure: dataflow diagram showing which buffers live only in shared
+memory (DoG, extrema) vs.\ device memory (Gaussian layers, keypoint list).
+Emphasize the absence of a DoG volume in DRAM.
+\end{fillbox}
+
+\subsection{Apron-Tiled Separable Gaussian Pyramid}
+\label{sec:gauss}
+\begin{fillbox}
+Describe \texttt{col\_kernel\_strips} and \texttt{row\_kernel}: strip/image
+indexing, apron sizing per layer (\texttt{apron = ceil(3*sigma/2)*2}), shared
+memory layout, and boundary handling. Present the optional fused
+\texttt{col\_row\_kernel} (single launch) and when it wins. Include the block/
+thread configuration table from the tuning comments (256 col threads,
+$32\times12$ row threads, \texttt{maxregs}).
+\end{fillbox}
+
+\subsection{Fused DoG + Scale-Space Extrema (No DRAM DoG)}
+\label{sec:fused}
+\begin{fillbox}
+Describe \texttt{blobs\_2}: load 5 adjacent Gaussian layers into 4 shared-memory
+DoG planes, compute differences in place, run the flattened min/max 26-neighbor
+test across layers, write only extrema. Quantify DRAM traffic saved vs.\
+materialized DoG. Include the shared-memory budget calculation.
+\end{fillbox}
+
+\subsection{Warp-Aggregated Keypoint Compaction}
+\label{sec:compact}
+\begin{fillbox}
+Describe \texttt{stream\_compact}: per-warp \texttt{vote\_ballot\_sync} mask,
+\texttt{popc} counts, warp-leader atomic into block offset, block-leader atomic
+into global counter, contrast threshold $\tau=0.01$. Emit \texttt{potential\_blob}
+records (x, y, image, octave, layer).
+\end{fillbox}
+
+\subsection{Radial-Flux Angular Signature}
+\label{sec:orient}
+
+The kernel \texttt{find\_orientations} characterizes each candidate not by a
+histogram of gradient \emph{directions}, as in Lowe's orientation
+assignment~\cite{lowe2004}, but by an angular profile of the \emph{radial
+intensity derivative} around the keypoint. One thread block processes one
+keypoint; a $(2r{+}1)\times(2r{+}1)$ neighborhood (plus a one-pixel apron) at
+the detected scale is staged in shared memory, where $r$ is the blob radius
+determined at detection ($r=\lceil 1.5\,\sigma_0 k^{\ell}+1\rceil$ in code).
+
+Let the keypoint center be $\mathbf{c}=(X,Y)$ and a neighborhood pixel be
+$\mathbf{p}=(x,y)$, with displacement $\mathbf{d}=\mathbf{p}-\mathbf{c}$, radius
+$\rho=\lVert\mathbf{d}\rVert$, and inward radial unit vector
+$\hat{\mathbf{r}}=-\mathbf{d}/\rho$. The image gradient
+$\nabla I(\mathbf{p})=(I_x,I_y)$ is estimated by central differences. Following
+the Oral-Qual formulation, the neighborhood accumulates a projection of the
+gradient onto the radial direction. We state the \emph{code-faithful} form,
+which augments Eq.~(1) of the Oral-Qual writeup in three respects
+(marked in \textcolor{teal}{teal}).
+
+\vspace{0.3em}
+\noindent\textbf{Per-pixel radial response.}
+\begin{equation}
+\label{eq:radial}
+m(\mathbf{p}) \;=\; \nabla I(\mathbf{p})\cdot\hat{\mathbf{r}}
+\;=\; -\,\frac{\nabla I(\mathbf{p})\cdot\mathbf{d}}{\rho},
+\qquad \rho>0 .
+\end{equation}
+This is the (inward) \enrich{radial \emph{derivative}} of intensity---a
+projection onto the \enrich{\emph{unit}} radial direction---rather than the raw
+dot product with the full position vector $\mathbf{r}$ written in Oral-Qual
+Eq.~(1). \enrich{At the singular center pixel ($\rho=0$) the kernel instead uses
+$m=\tfrac12\lVert\nabla I\rVert$ and bins by the gradient angle}, a case the
+original text did not treat.
+
+\vspace{0.3em}
+\noindent\textbf{Gaussian window.}
+\begin{equation}
+\label{eq:weight}
+w(\mathbf{p}) \;=\; \frac{1}{2\pi r}\,
+\exp\!\left(-\frac{\rho^{2}}{2r^{2}}\right).
+\end{equation}
+\enrich{This spatial weighting, present in the kernel but omitted from Oral-Qual
+Eq.~(1), down-weights peripheral pixels and makes the signature robust to
+neighborhood-boundary effects.}
+
+\vspace{0.3em}
+\noindent\textbf{Angular signature.} Each pixel contributes to the bin indexed
+by its \emph{angular position} about the center,
+\begin{equation}
+\label{eq:bin}
+\theta(\mathbf{p}) = \operatorname{atan2}(Y-y,\,X-x),\qquad
+b(\mathbf{p}) = \Big\lfloor \tfrac{\theta(\mathbf{p})\bmod 2\pi}{2\pi/B}\Big\rfloor,
+\end{equation}
+producing the $B$-bin signature ($B=32$, the warp width)
+\begin{equation}
+\label{eq:signature}
+h[b] \;=\!\! \sum_{\substack{\mathbf{p}\in N\\ b(\mathbf{p})=b}}\!\! w(\mathbf{p})\,m(\mathbf{p}).
+\end{equation}
+\enrich{We emphasize that the binning variable is the pixel's angular
+\emph{position}, $\theta(\mathbf{p})$, not the gradient's direction; the
+Oral-Qual prose was ambiguous on this point, and the two are distinct.}
+
+\begin{enrichbox}
+\textbf{Rotation invariance (added argument).} Rotate the image about
+$\mathbf{c}$ by $\phi$. Positions and gradients co-rotate, so $\hat{\mathbf{r}}
+\mapsto R_\phi\hat{\mathbf{r}}$ and $\nabla I\mapsto R_\phi\nabla I$; the
+projection $m=\nabla I\cdot\hat{\mathbf{r}}$ is a dot product of two co-rotating
+vectors and is therefore \emph{invariant}. The weight $w$ depends only on
+$\rho$ and is invariant. The bin index shifts uniformly, $\theta\mapsto
+\theta+\phi$, so the signature undergoes a cyclic shift, $h[b]\mapsto
+h[b-\Delta]$. Consequently any \emph{shift-invariant} summary of $h$---in
+particular its mean and standard deviation, hence the coefficient of variation
+of \S\ref{sec:cov}---is exactly rotation invariant (up to bin quantization).
+Note this yields a rotation-invariant \emph{selection criterion}, not a
+canonical orientation as in Lowe's method.
+\end{enrichbox}
+
+\begin{fillbox}
+Figure: the signature $h[b]$ for (a) an ideal blob (flat, low variation),
+(b) an edge (bimodal, high variation), (c) a skin wrinkle. Add a note verifying
+the central-difference sign convention against the shared-memory index stride
+in \texttt{find\_orientations} (\texttt{dy = data[l-1]-data[l+1]}).
+\end{fillbox}
+
+\subsection{Coefficient-of-Variation Symmetry Filter}
+\label{sec:cov}
+
+A candidate is accepted only if its angular signature $h[\cdot]$ is nearly
+uniform, which holds for radially symmetric blobs and fails for edges,
+wrinkles, and other anisotropic structure. We quantify uniformity by the
+coefficient of variation of the signature (Oral-Qual Eq.~(2), verified against
+\texttt{filter\_blobs}):
+\begin{equation}
+\label{eq:cov}
+c \;=\; \frac{\sigma(h)}{\lvert\mu(h)\rvert},\qquad
+\mu(h)=\frac{1}{B}\sum_{b=1}^{B} h[b],\quad
+\sigma(h)=\sqrt{\frac{1}{B}\sum_{b=1}^{B}\big(h[b]-\mu(h)\big)^2},
+\end{equation}
+and retain the keypoint iff $c<\theta_{\mathrm{cv}}$ (the code uses
+$\theta_{\mathrm{cv}}\approx 0.6$). \enrich{We take the absolute value of the
+mean and guard the near-zero case ($\lvert\mu\rvert<\epsilon\Rightarrow
+c=\infty$), matching the kernel; the Oral-Qual Eq.~(2) wrote $\sigma/\mu$
+without these safeguards.} Because $c$ is a shift-invariant functional of $h$,
+the accept/reject decision inherits the rotation invariance argued in
+\S\ref{sec:orient}.
+
+This single scalar test replaces SIFT's two-part refinement---the low-contrast
+threshold on the DoG response and the Hessian principal-curvature ratio
+$\mathrm{tr}(H)^2/\det(H)$ used for edge rejection~\cite{lowe2004}. \enrich{In
+contrast to the Hessian test, which requires forming and factoring a
+$2\times2$ second-moment matrix per candidate, the CV test reuses the already
+computed signature and costs one warp-level mean/variance reduction}, mapping
+naturally to \texttt{shfl\_down\_sync} across the $B=32$ bins.
+
+\begin{fillbox}
+Threshold sweep $\theta_{\mathrm{cv}}$ vs.\ precision/recall on blob markers
+(ablation, \S\ref{sec:results}). Compare rejection behavior against the Hessian
+edge filter on the same candidates. Add the warp-reduction cost model
+($O(\log B)$ shuffles) and cite Fig.~7 analogue.
+\end{fillbox}
+
+\subsection{Persistent Buffers for Real-Time Video}
+\label{sec:persist}
+\begin{fillbox}
+Describe the \texttt{reset}/\texttt{gpu\_elements} reuse path in the newer
+driver: allocate pyramid/keypoint buffers once, zero-and-reuse each frame,
+amortize allocation. Report per-frame latency with vs.\ without reuse.
+\end{fillbox}
+
+%==============================================================================
+\section{Implementation}
+\label{sec:impl}
+\begin{fillbox}
+Julia + CUDA.jl. Kernel launch configs, \texttt{maxregs} choices, occupancy,
+shared-memory sizing. Note portability considerations and any autotuning.
+\end{fillbox}
+
+%==============================================================================
+\section{Experimental Setup}
+\label{sec:setup}
+\begin{fillbox}
+GPU(s) and driver/toolkit versions. Baselines: reference SIFT (VLFeat/Lowe),
+SiftGPU, PopSift, CudaSift, OpenCV-CUDA. Datasets: Oxford/Mikolajczyk,
+HPatches, plus our blob-marked-skin captures and synthetic warps with known
+strain. Metrics: latency/frame, throughput (Mpix/s), DRAM bytes (Nsight),
+occupancy; repeatability/matching score; strain RMSE. (See Option~3 harness.)
+\end{fillbox}
+
+%==============================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Throughput and Latency}
+\begin{fillbox}
+Table + plot: ms/frame and Mpix/s across resolutions (VGA$\rightarrow$4K) vs.\
+baselines. Headline speedup.
+\end{fillbox}
+
+\subsection{Memory Traffic and the Fusion Win}
+\begin{fillbox}
+Nsight DRAM bytes: fused DoG+extrema vs.\ materialized. Roofline placement.
+\end{fillbox}
+
+\subsection{Detection Quality and Repeatability}
+\begin{fillbox}
+Repeatability under rotation/scale/illumination; keypoint-count parity so speed
+isn't bought with worse features.
+\end{fillbox}
+
+\subsection{Strain-Field Accuracy}
+\begin{fillbox}
+Recovered strain vs.\ ground truth on flexing-joint captures; error maps.
+\end{fillbox}
+
+\subsection{Ablations}
+\begin{fillbox}
+(a) fused vs.\ materialized DoG; (b) fused col\_row vs.\ two-pass;
+(c) persistent buffers vs.\ per-frame alloc; (d) CoV threshold sweep;
+(e) \texttt{maxregs}/block-size design space.
+\end{fillbox}
+
+%==============================================================================
+\section{Discussion and Limitations}
+\label{sec:discussion}
+\begin{fillbox}
+Radial-flux signature gives symmetry-based selection but no canonical rotation
+like Lowe's---state clearly. Shared-memory capacity bounds patch radius / layer
+count. Behavior under extreme scale change and marker occlusion.
+\end{fillbox}
+
+%==============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+\begin{fillbox}
+Recap the fully-resident design, the novel signature/filter, and the strain
+application. Future work: multi-GPU, descriptor extension, on-device matching.
+\end{fillbox}
+
+%------------------------------------------------------------------------------
+\begin{thebibliography}{1}
+\bibitem{lowe2004} D.~G. Lowe, ``Distinctive image features from scale-invariant keypoints,'' \emph{IJCV}, 2004.
+\bibitem{surf} H.~Bay et al., ``SURF: Speeded up robust features,'' \emph{CVIU}, 2008.
+\bibitem{kaze} P.~Alcantarilla et al., ``KAZE features,'' \emph{ECCV}, 2012.
+\bibitem{mikolajczyk2005} K.~Mikolajczyk et al., ``A comparison of affine region detectors,'' \emph{IJCV}, 2005.
+\bibitem{siftgpu} C.~Wu, ``SiftGPU: A GPU implementation of SIFT,'' 2007.
+\bibitem{popsift} C.~Griwodz et al., ``PopSift: A faithful SIFT implementation for real-time applications,'' \emph{MMSys}, 2018.
+\bibitem{cudasift} M.~Bjorkman, ``CudaSift,'' \note{cite/URL}.
+\bibitem{halide} J.~Ragan-Kelley et al., ``Halide,'' \emph{PLDI}, 2013.
+\bibitem{micikevicius_stencil} P.~Micikevicius, ``3D finite difference computation on GPUs using CUDA,'' \emph{GPGPU}, 2009.
+\bibitem{cuda_warpagg} \note{NVIDIA dev blog, warp-aggregated atomics / ballot compaction.}
+\bibitem{dic} M.~A. Sutton et al., \emph{Image Correlation for Shape, Motion and Deformation Measurements}, Springer, 2009.
+\end{thebibliography}
